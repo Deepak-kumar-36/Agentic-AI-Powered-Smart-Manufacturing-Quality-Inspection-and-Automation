@@ -1,0 +1,13 @@
+[build-system]
+requires = []
+build-backend = "backend"
+
+[project]
+name = "manufacturing-inspection"
+version = "0.1.0"
+description = "Local-first deterministic core for manufacturing visual inspection"
+requires-python = ">=3.12,<3.13"
+dependencies = ["numpy==2.2.6"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
