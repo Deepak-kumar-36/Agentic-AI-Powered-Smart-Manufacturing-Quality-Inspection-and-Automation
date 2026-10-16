@@ -95,6 +95,26 @@ class NativeEfficientADRuntime:
                 raise EfficientADRuntimeError(f"checkpoint missing {key}: {path}")
         return payload
 
+    @property
+    def loaded_categories(self) -> frozenset[str]:
+        """Return categories currently resident in the inference cache."""
+        return frozenset(self._bundles)
+
+    def reload(self, category: str | None = None) -> frozenset[str]:
+        """Invalidate cached models after reviewed artifacts are replaced.
+
+        The next score request reloads the selected category and revalidates its
+        checkpoint metadata and teacher hash. No request is served during this
+        method; callers should perform replacement atomically before invoking it.
+        """
+        if category is not None and category not in self.checkpoints:
+            raise EfficientADRuntimeError(f"category is not configured: {category}")
+        if category is None:
+            self._bundles.clear()
+        else:
+            self._bundles.pop(category, None)
+        return self.loaded_categories
+
     def score(self, category: str, image: str | Path) -> EfficientADImageScore:
         if category not in self.checkpoints:
             raise EfficientADRuntimeError(f"category is not configured: {category}")

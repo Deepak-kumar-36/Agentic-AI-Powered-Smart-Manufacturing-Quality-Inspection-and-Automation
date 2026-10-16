@@ -135,6 +135,17 @@ curl -X POST http://127.0.0.1:8000/api/v1/inspections \
 The client must not send `score` or `outcome`; those fields are ignored and the
 decision is produced only from the configured server-side model and policy.
 
+When replacing a reviewed checkpoint, replace it atomically and invalidate the
+resident cache before serving new requests:
+
+```python
+api.reload_model("bottle")  # or api.reload_model() for every category
+```
+
+The next request reloads the category and rechecks checkpoint metadata and the
+reference teacher hash. Cache invalidation is intentionally an in-process
+operation; it is not exposed as an unauthenticated HTTP endpoint.
+
 ## Kaggle EfficientAD-S experiments
 
 The Kaggle entry point is `notebooks/efficientad_s_kaggle.ipynb`. It expects

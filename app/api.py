@@ -51,6 +51,13 @@ class InspectionApi:
         self.policies = dict(policies or {})
         self.image_root = Path(image_root).resolve() if image_root is not None else None
 
+    def reload_model(self, category: str | None = None) -> list[str]:
+        """Invalidate the injected model cache after reviewed artifact replacement."""
+        reload_fn = getattr(self.model, "reload", None)
+        if not callable(reload_fn):
+            raise RuntimeError("configured model does not support reload")
+        return sorted(reload_fn(category))
+
     def handle(self, method: str, path: str, body: bytes = b"", headers: dict[str, str] | None = None) -> tuple[int, dict[str, Any]]:
         headers = {key.lower(): value for key, value in (headers or {}).items()}
         parsed = urlsplit(path)

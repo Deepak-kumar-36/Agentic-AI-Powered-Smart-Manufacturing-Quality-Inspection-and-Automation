@@ -22,6 +22,9 @@ class FakeModel:
     def score(self, _category: str, _image: str | Path) -> FakeEvidence:
         return FakeEvidence(self.score_value)
 
+    def reload(self, _category: str | None = None) -> set[str]:
+        return set()
+
 
 class InspectionApiTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -108,6 +111,13 @@ class InspectionApiTests(unittest.TestCase):
                 self.assertEqual(record["reason_codes"], ["IMAGE_INVALID"])
             finally:
                 api.store.close()
+
+    def test_reload_model_delegates_to_configured_runtime(self) -> None:
+        api = InspectionApi(InspectionStore(), model=FakeModel(0.1))
+        try:
+            self.assertEqual(api.reload_model("bottle"), [])
+        finally:
+            api.store.close()
 
 
 if __name__ == "__main__":

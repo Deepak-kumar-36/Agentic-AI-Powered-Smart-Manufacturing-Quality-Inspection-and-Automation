@@ -41,6 +41,21 @@ class EfficientADRuntimeTests(unittest.TestCase):
                     runtime.score("bottle", image)
                 load_bundle.assert_called_once()
 
+    def test_reload_invalidates_one_category(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            teacher = root / "teacher.pth"
+            bottle = root / "bottle.pt"
+            screw = root / "screw.pt"
+            teacher.write_bytes(b"teacher")
+            bottle.write_bytes(b"bottle")
+            screw.write_bytes(b"screw")
+            runtime = object.__new__(NativeEfficientADRuntime)
+            runtime.checkpoints = {"bottle": bottle, "screw": screw}
+            runtime._bundles = {"bottle": object(), "screw": object()}
+            self.assertEqual(runtime.reload("bottle"), frozenset({"screw"}))
+            self.assertEqual(runtime.reload(), frozenset())
+
 
 if __name__ == "__main__":
     unittest.main()
