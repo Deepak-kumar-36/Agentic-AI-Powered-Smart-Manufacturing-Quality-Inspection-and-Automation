@@ -72,6 +72,21 @@ Until a qualified model and camera are configured, every submitted inspection
 is durably recorded as `UNVERIFIED` with `MODEL_NOT_READY`; client-supplied
 scores and outcomes are not trusted.
 
+## Kaggle EfficientAD-S experiments
+
+The Kaggle entry point is `notebooks/efficientad_s_kaggle.ipynb`. It expects a
+private extracted MVTec AD dataset attached under `/kaggle/input/`, discovers
+the actual root automatically, validates the MVTec layout, and starts with
+`bottle`, `screw`, and `leather`. The reusable manifest, configuration, and
+evaluation helpers live under `app/efficientad/`.
+
+Install the pinned Kaggle experiment environment with
+`requirements-kaggle-efficientad.txt`. Training has **not** occurred merely
+because the notebook exists; only a completed Kaggle run with recorded metrics,
+checkpoint hashes, preprocessing metadata, and artifact manifest can qualify a
+category. MVTec AD is CC BY-NC-SA 4.0 and must remain private unless its terms
+permit the intended distribution or commercial use.
+
 ## Persistence status
 
 The first local SQLite inspection store is present in `app/persistence.py` with

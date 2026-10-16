@@ -14,6 +14,7 @@ This is the initial evidence-based matrix. `PLANNED` means the requirement is sp
 | ML-002 | User continuation §2; Doc 04 §4–5 | Project-native PatchCore numerical core with layer2/layer3-compatible embedding path | Critical | Implemented, not verified | `app/patchcore/core.py` | Real torch weights/runtime not verified | Run dependency-backed extractor and benchmark when runtime is available | Shape, finiteness, scoring, heatmap tests | Implemented not verified |
 | ML-003 | User continuation §2.3–4 | Category-specific MVTec discovery and strict dataset validation | Critical | Implemented, not verified | `app/patchcore/dataset.py`, `app/patchcore/cli.py` | Official dataset absent | Inventory actual MVTec root and build category banks | Fixture and real-dataset inventory | Implemented not verified |
 | ML-004 | User continuation §2.3; Doc 13 | Immutable hashed model/memory-bank artifacts | High | Implemented, not verified | `app/patchcore/artifacts.py` | No real release artifact | Build release manifest from actual bank | Hash/overwrite/no-pickle tests | Implemented not verified |
+| ML-005 | Current EfficientAD-S task | Reproducible Kaggle EfficientAD-S manifest/config/evaluation workflow | Critical | Implemented, smoke verified | `app/efficientad/`, `notebooks/efficientad_s_kaggle.ipynb`, `requirements-kaggle-efficientad.txt`, 28-test suite | Kaggle training and real metrics not executed | Run the private Kaggle notebook and export hashed checkpoints | Manifest, config, threshold, and artifact tests plus Kaggle run report | Smoke verified; qualification blocked |
 | API-001 | Doc 07 §5 | Health/readiness and inspection resource API | High | Implemented, software-only verified | `app/api.py`, `tests/test_api.py`, HTTP smoke command | Model/camera unavailable; no external process deployment | Connect qualified model and camera adapters | API contract and HTTP smoke tests | Software-only verified |
 | DB-001 | User continuation §7; Doc 07 §8 | Transactional local inspection records and immutable events | Critical | Implemented, not verified | `app/persistence.py` | Shell execution unavailable | Connect store to API/model flow | Read-back/restart/idempotency tests | Implemented not verified |
 | HW-001 | Doc 06 §6–8 | Firmware accepts only bounded, versioned, idempotent commands | Critical | Absent | No firmware source | No controller | Add protocol package/simulator only | Malformed/duplicate/unknown command tests | Blocked by firmware |
@@ -27,7 +28,7 @@ This is the initial evidence-based matrix. `PLANNED` means the requirement is sp
 
 ## Current gate assessment
 
-- Gate A (software development/testing): `NOT VERIFIED` — runtime and test command are not yet available.
+- Gate A (software development/testing): `SOFTWARE SLICE VERIFIED` — local tests and manifest checks execute; real model qualification remains open.
 - Gate B (live camera): `BLOCKED` — camera and adapter absent.
 - Gate C (supervised tabletop hardware): `BLOCKED` — hardware, firmware, protocol, and safety evidence absent.
 - Gate D/E: `NOT APPLICABLE TO CURRENT EVIDENCE`; no pilot or production claim is permitted.

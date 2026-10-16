@@ -15,3 +15,8 @@ backups/
 *.sqlite3
 models/
 test-evidence/raw/
+notebooks/.ipynb_checkpoints/
+*.ckpt
+*.pth
+*.pt
+*.safetensors
