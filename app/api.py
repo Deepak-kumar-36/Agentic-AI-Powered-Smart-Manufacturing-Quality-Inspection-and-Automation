@@ -201,14 +201,19 @@ def serve(
 
 def serve_api(api: InspectionApi, *, host: str = "127.0.0.1", port: int = 8000) -> None:
     """Serve an already configured API instance."""
-
-    class Handler(_Handler):
-        pass
-
-    Handler.api = api
-    server = ThreadingHTTPServer((host, port), Handler)
+    server = create_server(api, host=host, port=port)
     try:
         server.serve_forever()
     finally:
         server.server_close()
         api.store.close()
+
+
+def create_server(api: InspectionApi, *, host: str = "127.0.0.1", port: int = 8000) -> ThreadingHTTPServer:
+    """Create a server for tests or callers that manage their own thread."""
+
+    class Handler(_Handler):
+        pass
+
+    Handler.api = api
+    return ThreadingHTTPServer((host, port), Handler)

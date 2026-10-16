@@ -116,6 +116,25 @@ python -m app.serve \
 
 The example thresholds are placeholders and must not be used without review.
 
+Check the service after startup:
+
+```bash
+curl http://127.0.0.1:8000/health/live
+curl http://127.0.0.1:8000/health/ready
+```
+
+Submit a server-scored inspection using an image below `--image-root`:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/inspections \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: local-smoke-001' \
+  -d '{"category":"bottle","image_path":"sample.png"}'
+```
+
+The client must not send `score` or `outcome`; those fields are ignored and the
+decision is produced only from the configured server-side model and policy.
+
 ## Kaggle EfficientAD-S experiments
 
 The Kaggle entry point is `notebooks/efficientad_s_kaggle.ipynb`. It expects
