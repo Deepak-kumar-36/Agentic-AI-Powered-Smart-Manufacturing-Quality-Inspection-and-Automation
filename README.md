@@ -4,7 +4,7 @@ Local-first foundation for a traceable manufacturing visual-inspection platform.
 
 ## Current evidence boundary
 
-The workspace initially contained engineering specifications but no application or firmware repository, model artifact, dataset, camera, or ESP32 hardware. The current implementation therefore contains only the first safe vertical slice: a dependency-free deterministic decision policy. It does **not** claim genuine model inference, camera integration, persistence, dashboard functionality, firmware behavior, hardware verification, or production readiness.
+The workspace initially contained engineering specifications but no application or firmware repository, model artifact, dataset, camera, or ESP32 hardware. The current implementation contains a dependency-free deterministic decision policy plus a dependency-lazy native EfficientAD-S checkpoint adapter. It does **not** claim camera integration, dashboard functionality, firmware behavior, hardware verification, or production readiness.
 
 `PASS`, `FAIL`, and `UNVERIFIED` are explicit. Invalid/stale input, unavailable models, invalid scores, and incompatible model releases fail closed to `UNVERIFIED`.
 
@@ -71,6 +71,26 @@ timeline endpoints. Inspection creation requires an `Idempotency-Key` header.
 Until a qualified model and camera are configured, every submitted inspection
 is durably recorded as `UNVERIFIED` with `MODEL_NOT_READY`; client-supplied
 scores and outcomes are not trusted.
+
+The native EfficientAD-S adapter is available for explicit, verified artifacts:
+
+```python
+from app.efficientad.runtime import NativeEfficientADRuntime
+
+runtime = NativeEfficientADRuntime(
+    {"bottle": "/path/to/efficientad_s_bottle.pt"},
+    "/path/to/teacher_small.pth",
+    device="cuda",
+)
+evidence = runtime.score("bottle", "/path/to/image.png")
+print(evidence.score, evidence.model_version)
+```
+
+It never downloads weights, requires a category-specific native checkpoint, and
+rejects missing files, category mismatches, unsupported variants, missing
+checkpoint fields, and teacher-hash mismatches before returning evidence. The
+HTTP API is intentionally not wired to these artifacts until a full Kaggle run
+has been reviewed and the release thresholds are approved.
 
 ## Kaggle EfficientAD-S experiments
 
