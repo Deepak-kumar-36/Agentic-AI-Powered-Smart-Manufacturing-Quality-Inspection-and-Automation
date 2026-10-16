@@ -1,8 +1,26 @@
 import json
+from pathlib import Path
+import tempfile
 import unittest
 
 from app.api import InspectionApi
 from app.persistence import InspectionStore
+from app.policy import DecisionPolicy
+
+
+class FakeEvidence:
+    model_version = "efficientad-s-native-v1"
+
+    def __init__(self, score: float) -> None:
+        self.score = score
+
+
+class FakeModel:
+    def __init__(self, score: float) -> None:
+        self.score_value = score
+
+    def score(self, _category: str, _image: str | Path) -> FakeEvidence:
+        return FakeEvidence(self.score_value)
 
 
 class InspectionApiTests(unittest.TestCase):
@@ -48,6 +66,48 @@ class InspectionApiTests(unittest.TestCase):
         body = json.dumps({"category": "bottle", "outcome": "PASS", "score": 0.0}).encode()
         record = self.api.handle("POST", "/api/v1/inspections", body, {"Idempotency-Key": "untrusted"})[1]
         self.assertEqual(record["outcome"], "UNVERIFIED")
+
+    def test_configured_model_records_policy_decision(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "sample.png"
+            image.write_bytes(b"image-placeholder")
+            api = InspectionApi(
+                InspectionStore(),
+                model=FakeModel(0.1),
+                policies={"bottle": DecisionPolicy("policy-1", frozenset({"efficientad-s-native-v1"}), 0.2, 0.8)},
+                image_root=directory,
+            )
+            try:
+                status, record = api.handle(
+                    "POST", "/api/v1/inspections",
+                    json.dumps({"category": "bottle", "image_path": "sample.png"}).encode(),
+                    {"Idempotency-Key": "model-backed"},
+                )
+                self.assertEqual(status, 201)
+                self.assertEqual(record["outcome"], "PASS")
+                self.assertEqual(record["model_version"], "efficientad-s-native-v1")
+                self.assertEqual(record["score"], 0.1)
+            finally:
+                api.store.close()
+
+    def test_model_request_rejects_path_escape(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            api = InspectionApi(
+                InspectionStore(),
+                model=FakeModel(0.1),
+                policies={"bottle": DecisionPolicy("policy-1", frozenset({"efficientad-s-native-v1"}), 0.2, 0.8)},
+                image_root=directory,
+            )
+            try:
+                record = api.handle(
+                    "POST", "/api/v1/inspections",
+                    json.dumps({"category": "bottle", "image_path": "../outside.png"}).encode(),
+                    {"Idempotency-Key": "path-escape"},
+                )[1]
+                self.assertEqual(record["outcome"], "UNVERIFIED")
+                self.assertEqual(record["reason_codes"], ["IMAGE_INVALID"])
+            finally:
+                api.store.close()
 
 
 if __name__ == "__main__":

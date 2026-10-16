@@ -1,8 +1,8 @@
-"""Dependency-free local HTTP API for the software-only inspection path.
+"""Local HTTP API for the software-only inspection path.
 
-The API intentionally has no model or hardware fallback. Until a qualified
-PatchCore release and camera source are configured, an inspection is persisted
-as UNVERIFIED rather than accepting client-supplied scores or decisions.
+The API supports an explicitly injected image scorer and policy map. Without
+those dependencies it persists UNVERIFIED rather than accepting client-supplied
+scores or decisions.
 """
 
 from __future__ import annotations
@@ -11,10 +11,16 @@ from dataclasses import asdict
 import json
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any
+from pathlib import Path
+from typing import Any, Mapping, Protocol
 from urllib.parse import parse_qs, urlsplit
 
 from .persistence import InspectionRecord, InspectionStore
+from .policy import DecisionPolicy, InspectionInput, ModelEvidence, reason_values
+
+
+class ImageScorer(Protocol):
+    def score(self, category: str, image: str | Path) -> Any: ...
 
 
 class ApiError(Exception):
@@ -32,8 +38,18 @@ def _record_payload(record: InspectionRecord) -> dict[str, Any]:
 
 
 class InspectionApi:
-    def __init__(self, store: InspectionStore | None = None) -> None:
+    def __init__(
+        self,
+        store: InspectionStore | None = None,
+        *,
+        model: ImageScorer | None = None,
+        policies: Mapping[str, DecisionPolicy] | None = None,
+        image_root: str | Path | None = None,
+    ) -> None:
         self.store = store or InspectionStore()
+        self.model = model
+        self.policies = dict(policies or {})
+        self.image_root = Path(image_root).resolve() if image_root is not None else None
 
     def handle(self, method: str, path: str, body: bytes = b"", headers: dict[str, str] | None = None) -> tuple[int, dict[str, Any]]:
         headers = {key.lower(): value for key, value in (headers or {}).items()}
@@ -43,9 +59,9 @@ class InspectionApi:
             if method == "GET" and route == "/health/live":
                 return 200, {"status": "ok", "service": "inspection-api"}
             if method == "GET" and route == "/health/ready":
-                return 200, {"ready": True, "components": {"database": "ready", "model": "not_ready", "camera": "not_configured", "controller": "disabled"}}
+                return 200, {"ready": True, "components": {"database": "ready", "model": "ready" if self.model else "not_ready", "camera": "not_configured", "controller": "disabled"}}
             if method == "GET" and route == "/api/v1/system/status":
-                return 200, {"mode": "software_only", "actuation_enabled": False, "model": "not_ready", "camera": "not_configured", "database": "ready"}
+                return 200, {"mode": "software_only", "actuation_enabled": False, "model": "ready" if self.model else "not_ready", "camera": "not_configured", "database": "ready"}
             if method == "GET" and route == "/api/v1/inspections":
                 limit = int(parse_qs(parsed.query).get("limit", [50])[0])
                 return 200, {"items": [_record_payload(item) for item in self.store.list(limit)]}
@@ -83,15 +99,61 @@ class InspectionApi:
             raise ApiError(400, "CATEGORY_REQUIRED", "category is required")
         record = self.store.create(idempotency_key, payload)
         if record.outcome is None:
-            record = self.store.record_decision(
-                record.inspection_id,
-                outcome="UNVERIFIED",
-                reason_codes=["MODEL_NOT_READY"],
-                policy_version="policy-unverified",
-                model_version=None,
-                score=None,
-            )
+            record = self._decide(record.inspection_id, payload)
         return 201, _record_payload(record)
+
+    def _decide(self, inspection_id: str, payload: dict[str, Any]) -> InspectionRecord:
+        category = payload["category"].strip()
+        if self.model is None:
+            return self.store.record_decision(
+                inspection_id, outcome="UNVERIFIED", reason_codes=["MODEL_NOT_READY"],
+                policy_version="policy-unverified", model_version=None, score=None,
+            )
+        policy = self.policies.get(category)
+        if policy is None:
+            return self.store.record_decision(
+                inspection_id, outcome="UNVERIFIED", reason_codes=["MODEL_NOT_READY"],
+                policy_version="policy-unverified", model_version=None, score=None,
+            )
+        image_path = self._image_path(payload.get("image_path"))
+        if image_path is None:
+            return self.store.record_decision(
+                inspection_id, outcome="UNVERIFIED", reason_codes=["IMAGE_INVALID"],
+                policy_version=policy.version, model_version=None, score=None,
+            )
+        try:
+            evidence = self.model.score(category, image_path)
+        except Exception:
+            return self.store.record_decision(
+                inspection_id, outcome="UNVERIFIED", reason_codes=["MODEL_NOT_READY"],
+                policy_version=policy.version, model_version=None, score=None,
+            )
+        decision = policy.evaluate(
+            InspectionInput(valid=True),
+            ModelEvidence(model_version=evidence.model_version, score=evidence.score),
+        )
+        return self.store.record_decision(
+            inspection_id,
+            outcome=decision.outcome.value,
+            reason_codes=reason_values(decision.reason_codes),
+            policy_version=decision.policy_version,
+            model_version=decision.model_version,
+            score=decision.score,
+        )
+
+    def _image_path(self, value: Any) -> Path | None:
+        if not isinstance(value, str) or not value.strip():
+            return None
+        candidate = Path(value)
+        if self.image_root is not None:
+            candidate = (self.image_root / candidate).resolve() if not candidate.is_absolute() else candidate.resolve()
+            try:
+                candidate.relative_to(self.image_root)
+            except ValueError:
+                return None
+        else:
+            candidate = candidate.resolve()
+        return candidate if candidate.is_file() else None
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -124,8 +186,16 @@ class _Handler(BaseHTTPRequestHandler):
         return
 
 
-def serve(host: str = "127.0.0.1", port: int = 8000, store: InspectionStore | None = None) -> None:
-    api = InspectionApi(store)
+def serve(
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    store: InspectionStore | None = None,
+    *,
+    model: ImageScorer | None = None,
+    policies: Mapping[str, DecisionPolicy] | None = None,
+    image_root: str | Path | None = None,
+) -> None:
+    api = InspectionApi(store, model=model, policies=policies, image_root=image_root)
 
     class Handler(_Handler):
         pass

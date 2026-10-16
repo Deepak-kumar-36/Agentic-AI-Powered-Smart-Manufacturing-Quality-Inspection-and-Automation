@@ -68,9 +68,11 @@ python -c 'from app.api import serve; serve()'
 It binds to `127.0.0.1` by default and exposes liveness/readiness, system
 status, inspection creation, bounded history, inspection retrieval, and event
 timeline endpoints. Inspection creation requires an `Idempotency-Key` header.
-Until a qualified model and camera are configured, every submitted inspection
-is durably recorded as `UNVERIFIED` with `MODEL_NOT_READY`; client-supplied
-scores and outcomes are not trusted.
+Without an explicitly injected model and category policy, every submitted
+inspection is durably recorded as `UNVERIFIED` with `MODEL_NOT_READY`;
+client-supplied scores and outcomes are not trusted. Model-backed requests use
+an `image_path` relative to the configured image root and are evaluated by the
+server-side policy.
 
 The native EfficientAD-S adapter is available for explicit, verified artifacts:
 
