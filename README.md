@@ -74,9 +74,9 @@ scores and outcomes are not trusted.
 
 ## Kaggle EfficientAD-S experiments
 
-The Kaggle entry point is `notebooks/efficientad_s_kaggle.ipynb`. It expects a
-private extracted MVTec AD dataset attached under `/kaggle/input/`, discovers
-the actual root automatically, validates the MVTec layout, and starts with
+The Kaggle entry point is `notebooks/efficientad_s_kaggle.ipynb`. It expects
+the authorized MVTec AD dataset attached at
+`/kaggle/input/datasets/ipythonx/mvtec-ad`, validates the MVTec layout, and starts with
 `bottle`, `screw`, and `leather`. The reusable manifest, configuration, and
 evaluation helpers live under `app/efficientad/`.
 
