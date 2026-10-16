@@ -77,16 +77,14 @@ scores and outcomes are not trusted.
 The Kaggle entry point is `notebooks/efficientad_s_kaggle.ipynb`. It expects
 the authorized MVTec AD dataset attached at
 `/kaggle/input/datasets/ipythonx/mvtec-ad`, validates the MVTec layout, and starts with
-`bottle`, `screw`, and `leather`. The reusable manifest, configuration, and
+`bottle`, `screw`, and `capsule`. The reusable manifest, configuration, and
 evaluation helpers live under `app/efficientad/`.
 
 Install the pinned Kaggle experiment environment with
 `requirements-kaggle-efficientad.txt`. The Kaggle-compatible pair is currently
 PyTorch `2.6.0` and Torchvision `0.21.0` for the Python 3.13 notebook image.
-The notebook uses Anomalib's current `MVTecAD` datamodule (rather than the
-deprecated `MVTec` alias) and removes Kaggle's optional Transformers package because EfficientAD-S
-does not use it and TorchMetrics otherwise discovers and imports Kaggle's
-incompatible optional text-metrics stack.
+The notebook uses the project's native EfficientAD-S implementation and removes
+Kaggle's optional Transformers package because EfficientAD-S does not use it.
 Training has **not** occurred merely
 because the notebook exists; only a completed Kaggle run with recorded metrics,
 checkpoint hashes, preprocessing metadata, and artifact manifest can qualify a
