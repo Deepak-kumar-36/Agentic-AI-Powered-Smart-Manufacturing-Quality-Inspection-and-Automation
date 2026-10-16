@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from app.efficientad.runtime import EfficientADRuntimeError, NativeEfficientADRuntime
 
@@ -19,6 +20,26 @@ class EfficientADRuntimeTests(unittest.TestCase):
             teacher.write_bytes(b"placeholder")
             with self.assertRaisesRegex(EfficientADRuntimeError, "category checkpoint"):
                 NativeEfficientADRuntime({"bottle": Path(directory) / "bottle.pt"}, teacher)
+
+    def test_category_bundle_is_loaded_once(self) -> None:
+        try:
+            import torch  # noqa: F401
+        except ImportError:
+            self.skipTest("torch is not installed in the system test interpreter")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            teacher = root / "teacher.pth"
+            checkpoint = root / "bottle.pt"
+            image = root / "image.png"
+            teacher.write_bytes(b"teacher")
+            checkpoint.write_bytes(b"checkpoint")
+            image.write_bytes(b"image")
+            with patch("app.efficientad.runtime.load_teacher"), patch("app.efficientad.runtime.load_model_bundle", return_value=object()) as load_bundle, patch("app.efficientad.runtime.infer_loaded", return_value=(0.1, object())):
+                runtime = NativeEfficientADRuntime({"bottle": checkpoint}, teacher)
+                with patch.object(runtime, "_checkpoint_payload", return_value={}):
+                    runtime.score("bottle", image)
+                    runtime.score("bottle", image)
+                load_bundle.assert_called_once()
 
 
 if __name__ == "__main__":

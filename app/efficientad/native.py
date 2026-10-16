@@ -106,6 +106,16 @@ class NativeRun:
     labels: list[int]
 
 
+@dataclass
+class LoadedEfficientAD:
+    teacher: Any
+    student: Any
+    autoencoder: Any
+    mean: Any
+    std: Any
+    device: Any
+
+
 def _teacher_stats(teacher, loader, device):
     torch, _, _, _ = _torch()
     values = []
@@ -137,6 +147,35 @@ def predict(image, teacher, student, ae, mean, std, q_values=None):
         combined = .5 * local_map + .5 * global_map
         combined = torch.nn.functional.pad(combined, (4, 4, 4, 4))
         return combined, local_map, global_map
+
+
+def load_model_bundle(checkpoint_path: str | Path, teacher_path: str | Path, device: str = "cuda") -> LoadedEfficientAD:
+    """Load a native checkpoint once for reuse across multiple images."""
+    torch, _, _, _ = _torch()
+    target = torch.device(device if device == "cpu" or torch.cuda.is_available() else "cpu")
+    payload = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+    teacher = load_teacher(teacher_path, target)
+    student = pdn_small(768).to(target)
+    student.load_state_dict(payload["student"])
+    student.eval()
+    ae = autoencoder().to(target)
+    ae.load_state_dict(payload["autoencoder"])
+    ae.eval()
+    return LoadedEfficientAD(teacher, student, ae, payload["teacher_mean"].to(target), payload["teacher_std"].to(target), target)
+
+
+def infer_loaded(bundle: LoadedEfficientAD, image_path: str | Path) -> tuple[float, np.ndarray]:
+    """Infer with an already loaded model bundle."""
+    torch, Image, _, _ = _torch()
+    transform = image_transform()
+    with Image.open(image_path) as source:
+        original = source.convert("RGB")
+        width, height = original.size
+        image = transform(original)[None].to(bundle.device)
+    combined, _, _ = predict(image, bundle.teacher, bundle.student, bundle.autoencoder, bundle.mean, bundle.std)
+    combined = torch.nn.functional.interpolate(combined, (height, width), mode="bilinear", align_corners=False)[0, 0]
+    anomaly_map = combined.detach().cpu().numpy().astype(np.float32)
+    return float(anomaly_map.max()), anomaly_map
 
 
 def overlay_image(image_path: str | Path, anomaly_map: np.ndarray, output_path: str | Path) -> None:
@@ -221,19 +260,4 @@ def train_category(
 
 def infer_checkpoint(checkpoint_path: str | Path, teacher_path: str | Path, image_path: str | Path, device: str = "cuda") -> tuple[float, np.ndarray]:
     """Reload a native checkpoint and return score plus an input-sized map."""
-    torch, Image, _, _ = _torch()
-    target = torch.device(device if device == "cpu" or torch.cuda.is_available() else "cpu")
-    payload = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
-    teacher = load_teacher(teacher_path, target)
-    student = pdn_small(768).to(target); student.load_state_dict(payload["student"]); student.eval()
-    ae = autoencoder().to(target); ae.load_state_dict(payload["autoencoder"]); ae.eval()
-    mean = payload["teacher_mean"].to(target); std = payload["teacher_std"].to(target)
-    transform = image_transform()
-    with Image.open(image_path) as source:
-        original = source.convert("RGB")
-        width, height = original.size
-        image = transform(original)[None].to(target)
-    combined, _, _ = predict(image, teacher, student, ae, mean, std)
-    combined = torch.nn.functional.interpolate(combined, (height, width), mode="bilinear", align_corners=False)[0, 0]
-    anomaly_map = combined.detach().cpu().numpy().astype(np.float32)
-    return float(anomaly_map.max()), anomaly_map
+    return infer_loaded(load_model_bundle(checkpoint_path, teacher_path, device), image_path)

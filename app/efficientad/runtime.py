@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .native import EfficientADDependencyError, infer_checkpoint, load_teacher, sha256_file
+from .native import EfficientADDependencyError, infer_loaded, load_model_bundle, load_teacher, sha256_file
 
 
 class EfficientADRuntimeError(RuntimeError):
@@ -48,6 +48,7 @@ class NativeEfficientADRuntime:
         self.checkpoints = {category: Path(path) for category, path in checkpoints.items()}
         self.teacher_path = Path(teacher_path)
         self.device = device
+        self._bundles: dict[str, Any] = {}
         self._validate_paths()
         self._validate_teacher_dependency()
 
@@ -100,5 +101,7 @@ class NativeEfficientADRuntime:
         payload = self._checkpoint_payload(category)
         del payload
         checkpoint = self.checkpoints[category]
-        score, heatmap = infer_checkpoint(checkpoint, self.teacher_path, image, self.device)
+        if category not in self._bundles:
+            self._bundles[category] = load_model_bundle(checkpoint, self.teacher_path, self.device)
+        score, heatmap = infer_loaded(self._bundles[category], image)
         return EfficientADImageScore(category, Path(image), score, heatmap, self.MODEL_VERSION, checkpoint)
