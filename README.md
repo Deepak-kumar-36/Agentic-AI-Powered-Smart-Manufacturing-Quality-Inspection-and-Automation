@@ -100,6 +100,22 @@ contains `qualification_status: QUALIFIED`, verifies the teacher and category
 checkpoint hashes, and requires reviewer-supplied thresholds for every category.
 Smoke or unqualified runs cannot create a model-backed API.
 
+The reproducible server entry point is:
+
+```bash
+python -m app.serve \
+  --metadata /path/to/run_metadata.json \
+  --artifacts /path/to/efficientad_s_artifacts \
+  --teacher /path/to/teacher_small.pth \
+  --image-root /path/to/images \
+  --threshold bottle:0.2:0.8 \
+  --threshold screw:0.2:0.8 \
+  --threshold capsule:0.2:0.8 \
+  --device cuda
+```
+
+The example thresholds are placeholders and must not be used without review.
+
 ## Kaggle EfficientAD-S experiments
 
 The Kaggle entry point is `notebooks/efficientad_s_kaggle.ipynb`. It expects

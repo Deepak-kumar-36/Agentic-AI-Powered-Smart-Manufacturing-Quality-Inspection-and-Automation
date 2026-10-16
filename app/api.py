@@ -196,6 +196,11 @@ def serve(
     image_root: str | Path | None = None,
 ) -> None:
     api = InspectionApi(store, model=model, policies=policies, image_root=image_root)
+    serve_api(api, host=host, port=port)
+
+
+def serve_api(api: InspectionApi, *, host: str = "127.0.0.1", port: int = 8000) -> None:
+    """Serve an already configured API instance."""
 
     class Handler(_Handler):
         pass
