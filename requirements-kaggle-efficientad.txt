@@ -7,4 +7,3 @@ lightning==2.5.0.post0
 numpy==2.2.6
 Pillow==11.1.0
 scikit-learn==1.6.1
-jupyterlab==4.3.5
