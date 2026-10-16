@@ -1,7 +1,8 @@
 # Kaggle GPU experiment environment; application runtime remains dependency-light.
 anomalib==2.2.0
-torch==2.5.1
-torchvision==0.20.1
+# Kaggle currently exposes CPython 3.13 wheels for this compatible pair.
+torch==2.6.0
+torchvision==0.21.0
 lightning==2.5.0.post0
 numpy==2.2.6
 Pillow==11.1.0

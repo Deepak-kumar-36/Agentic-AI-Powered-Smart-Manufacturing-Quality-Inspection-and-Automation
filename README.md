@@ -81,7 +81,9 @@ the authorized MVTec AD dataset attached at
 evaluation helpers live under `app/efficientad/`.
 
 Install the pinned Kaggle experiment environment with
-`requirements-kaggle-efficientad.txt`. Training has **not** occurred merely
+`requirements-kaggle-efficientad.txt`. The Kaggle-compatible pair is currently
+PyTorch `2.6.0` and Torchvision `0.21.0` for the Python 3.13 notebook image.
+Training has **not** occurred merely
 because the notebook exists; only a completed Kaggle run with recorded metrics,
 checkpoint hashes, preprocessing metadata, and artifact manifest can qualify a
 category. MVTec AD is CC BY-NC-SA 4.0 and must remain private unless its terms
