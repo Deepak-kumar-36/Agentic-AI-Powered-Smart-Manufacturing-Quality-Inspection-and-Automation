@@ -83,7 +83,8 @@ evaluation helpers live under `app/efficientad/`.
 Install the pinned Kaggle experiment environment with
 `requirements-kaggle-efficientad.txt`. The Kaggle-compatible pair is currently
 PyTorch `2.6.0` and Torchvision `0.21.0` for the Python 3.13 notebook image.
-The notebook removes Kaggle's optional Transformers package because EfficientAD-S
+The notebook uses Anomalib's current `MVTecAD` datamodule (rather than the
+deprecated `MVTec` alias) and removes Kaggle's optional Transformers package because EfficientAD-S
 does not use it and TorchMetrics otherwise discovers and imports Kaggle's
 incompatible optional text-metrics stack.
 Training has **not** occurred merely
