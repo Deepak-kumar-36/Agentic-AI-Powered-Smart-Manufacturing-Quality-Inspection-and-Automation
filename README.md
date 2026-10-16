@@ -94,6 +94,12 @@ checkpoint fields, and teacher-hash mismatches before returning evidence. The
 HTTP API is intentionally not wired to these artifacts until a full Kaggle run
 has been reviewed and the release thresholds are approved.
 
+After review, `app.efficientad.release.load_reviewed_release` is the guarded
+assembly point for local use. It requires a full run whose metadata explicitly
+contains `qualification_status: QUALIFIED`, verifies the teacher and category
+checkpoint hashes, and requires reviewer-supplied thresholds for every category.
+Smoke or unqualified runs cannot create a model-backed API.
+
 ## Kaggle EfficientAD-S experiments
 
 The Kaggle entry point is `notebooks/efficientad_s_kaggle.ipynb`. It expects
