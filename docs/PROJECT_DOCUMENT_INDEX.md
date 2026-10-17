@@ -22,7 +22,7 @@
 | 13 | Dataset Governance, Annotation & Model Release Workflow | `Document_13_Dataset_Governance_Annotation_Model_Release_Workflow.md` | 1.0, proposed workflow | Provenance, labels, split integrity, manifests, approvals, and rollback. |
 | 14 | Observability, Logging, Metrics & Incident Response | `Document_14_Observability_Logging_Metrics_Incident_Response.md` | 1.0, proposed target design | Correlation, structured events, metrics, readiness, and incident playbooks. |
 | 15 | Performance Engineering, Capacity Planning & Reliability Budgets | `Document_15_Performance_Engineering_Capacity_Planning_Reliability_Budgets.md` | 1.0, proposed benchmark plan | End-to-end timing and reliability measurement; no claimed numbers. |
-| 16 | Backup, Disaster Recovery & Business Continuity | **Missing** | Not accessible | No file matching `Document_16*` exists in the workspace. Backup requirements are referenced by Documents 10, 12, 15, and 17. |
+| 16 | Backup, Disaster Recovery & Business Continuity | `Document_16_Backup_Disaster_Recovery_Business_Continuity.md` | 1.0, proposed plan | Present and reviewed; actual backup implementation and recovery timings remain unverified. |
 | 17 | Production Readiness Review & Go/No-Go Assessment | `Document_17_Production_Readiness_Go_No_Go_Assessment.md` | 1.0, assessment template | Gate A–E readiness vocabulary and evidence bundle. |
 
 ## Additional specification
@@ -44,4 +44,4 @@ The documents consistently require: local-first operation; explicit `PASS`/`FAIL
 
 ## Reading limitation
 
-The expected Document 16 is unavailable, so its requirements cannot be claimed as read. No implementation or readiness decision should rely on an unstated interpretation of that missing document.
+Document 16 is now present, but its proposed backup/DR requirements are not yet implemented or verified. No recovery claim should be made until a clean-location restore drill succeeds.
