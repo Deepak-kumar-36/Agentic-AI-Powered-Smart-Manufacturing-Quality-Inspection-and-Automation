@@ -108,6 +108,7 @@ python -m app.serve \
   --artifacts /path/to/efficientad_s_artifacts \
   --teacher /path/to/teacher_small.pth \
   --image-root /path/to/images \
+  --db data/inspection.sqlite3 \
   --threshold bottle:0.2:0.8 \
   --threshold screw:0.2:0.8 \
   --threshold capsule:0.2:0.8 \
@@ -115,6 +116,9 @@ python -m app.serve \
 ```
 
 The example thresholds are placeholders and must not be used without review.
+The CLI uses `data/inspection.sqlite3` by default so inspections and event
+history survive API restarts. The `data/` directory is intentionally ignored by
+Git.
 
 Check the service after startup:
 

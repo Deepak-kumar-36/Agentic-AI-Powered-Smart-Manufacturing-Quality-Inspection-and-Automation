@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .api import serve_api
 from .efficientad.release import load_reviewed_release
+from .persistence import InspectionStore
 
 
 def parse_threshold(value: str) -> tuple[str, tuple[float, float]]:
@@ -29,6 +30,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--artifacts", type=Path, required=True, help="root of downloaded EfficientAD artifacts")
     parser.add_argument("--teacher", type=Path, required=True, help="path to teacher_small.pth")
     parser.add_argument("--image-root", type=Path, required=True, help="directory containing request images")
+    parser.add_argument("--db", type=Path, default=Path("data/inspection.sqlite3"), help="durable SQLite database path")
     parser.add_argument("--threshold", action="append", type=parse_threshold, required=True, help="category:pass:fail; repeat per category")
     parser.add_argument("--device", default="cpu", choices=("cpu", "cuda"))
     parser.add_argument("--host", default="127.0.0.1")
@@ -40,7 +42,8 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     thresholds = dict(args.threshold)
     release = load_reviewed_release(args.metadata, args.artifacts, args.teacher, thresholds)
-    api = release.create_api(device=args.device, image_root=args.image_root)
+    args.db.parent.mkdir(parents=True, exist_ok=True)
+    api = release.create_api(device=args.device, image_root=args.image_root, store=InspectionStore(args.db))
     serve_api(api, host=args.host, port=args.port)
     return 0
 
