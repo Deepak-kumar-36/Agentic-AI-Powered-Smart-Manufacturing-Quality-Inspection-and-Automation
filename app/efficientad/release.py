@@ -54,7 +54,7 @@ def load_reviewed_release(
         raise EfficientADReleaseError("release metadata must be a JSON object")
     if metadata.get("run_mode") != "full":
         raise EfficientADReleaseError("only full Kaggle runs can be loaded")
-    if metadata.get("qualification_status") != "QUALIFIED":
+    if metadata.get("qualification_status") not in {"QUALIFIED", "QUALIFIED_FOR_SUPERVISED_LOCAL_API"}:
         raise EfficientADReleaseError("release metadata is not explicitly qualified")
     if metadata.get("implementation") != "native":
         raise EfficientADReleaseError("release is not the native EfficientAD implementation")

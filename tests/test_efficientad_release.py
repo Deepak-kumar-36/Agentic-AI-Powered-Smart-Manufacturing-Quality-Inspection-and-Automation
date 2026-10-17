@@ -50,6 +50,15 @@ class EfficientADReleaseTests(unittest.TestCase):
             self.assertEqual(release.checkpoints["bottle"].name, "efficientad_s_bottle.pt")
             self.assertEqual(release.policies["bottle"].fail_threshold, 0.8)
 
+    def test_supervised_local_qualification_is_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            metadata, teacher = self._metadata(root)
+            text = metadata.read_text(encoding="utf-8").replace("QUALIFIED", "QUALIFIED_FOR_SUPERVISED_LOCAL_API")
+            metadata.write_text(text, encoding="utf-8")
+            release = load_reviewed_release(metadata, root, teacher, {"bottle": (0.2, 0.8)})
+            self.assertEqual(release.metadata["qualification_status"], "QUALIFIED_FOR_SUPERVISED_LOCAL_API")
+
 
 if __name__ == "__main__":
     unittest.main()
