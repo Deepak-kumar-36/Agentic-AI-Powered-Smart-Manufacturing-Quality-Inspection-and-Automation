@@ -130,14 +130,19 @@ curl http://127.0.0.1:8000/health/ready
 
 ## Browser dashboard
 
-`dashboard/index.html` is a dependency-free browser preview for the existing
-HTTP API. It reads readiness and system status, submits inspections through the
+`dashboard/index.html` is a dependency-free browser control room for the
+existing HTTP API. It uses a light manufacturing dashboard layout with a dark
+navigation rail, system/model/database status, image inspection workflow,
+decision evidence, model information, system health, outcome overview, score
+distribution, and recent inspections. It submits inspections through the
 existing JSON contract, shows outcomes/reason codes and scores, lists stored
-inspection history, and loads the selected inspection's event timeline. If an
-API response includes supported evidence fields (`evidence.heatmap_url`,
-`evidence.overlay_url`, `heatmap_url`, or `evidence_url`), it displays those
-images; the current record contract does not persist evidence images, so the
-dashboard explains when none is available.
+inspection history, and loads the selected inspection's event timeline. Charts
+are derived only from records returned by the API. Values that the API does not
+return (such as processing duration or an input-image URL) remain explicitly
+unknown rather than being estimated. If an API response includes supported
+evidence fields (`evidence.heatmap_url`, `evidence.overlay_url`, `heatmap_url`,
+or `evidence_url`), it displays those images; otherwise the dashboard explains
+that evidence is unavailable.
 
 The file chooser uploads the selected image to the configured local image root
 through `POST /api/v1/images`, then fills the returned safe relative path into
@@ -160,11 +165,15 @@ supports the browser's `OPTIONS` preflight.
 
 ### Dashboard smoke test
 
-With both servers running, verify that the page shows **API connected**, that
-the **Refresh** button loads the history table, and that submitting a relative
-path creates a record or shows the API's clear error. Click a history row and
-verify that its decision and event timeline load. If the API has no configured
-model, the expected decision is `UNVERIFIED` with `MODEL_NOT_READY`.
+With both servers running, verify that the page shows **Online**, that the
+**Refresh data** button loads the recent-inspection table and derived charts,
+and that submitting a relative path creates a record or shows the API's clear
+error. Click a history row and verify that its decision, evidence (when
+returned), and event timeline load. If the API has no configured model, the
+expected decision is `UNVERIFIED` with `MODEL_NOT_READY`. The dashboard should
+also remain usable at approximately 390px and 1024px viewport widths without
+horizontal overflow; processing time should remain **Unknown** because it is
+not part of the current API response.
 
 Submit a server-scored inspection using an image below `--image-root`:
 
