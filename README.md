@@ -35,6 +35,19 @@ make test
 
 The test command is offline and exercises policy threshold boundaries, invalid/stale evidence, unavailable and incompatible models, non-finite scores, and invalid policy configuration.
 
+Dashboard histogram regression tests use dependency-free Node.js built-in tests
+(optional Node.js 22.20.0 pinned in `.nvmrc`):
+
+```bash
+node --test tests/dashboard_analytics.test.cjs
+```
+
+`make test` also runs these tests when `node` is present; otherwise it reports
+an explicit skip (including in the Python-only Docker image). Anomaly scores
+are not probabilities: the dashboard uses ten bins from zero to the observed
+nonnegative maximum (at least one), excluding missing, non-numeric, negative,
+and non-finite scores.
+
 ## PatchCore dataset inventory
 
 The MVTec AD loader never downloads or fabricates data. After obtaining the
