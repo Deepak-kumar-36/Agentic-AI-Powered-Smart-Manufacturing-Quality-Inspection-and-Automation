@@ -1,3 +1,4 @@
 numpy==2.2.6
-# Optional ML runtime dependencies are intentionally not included until the
-# workstation's supported torch/torchvision versions are measured and pinned.
+Pillow==12.3.0
+# Torch/torchvision remain optional until the workstation's supported versions
+# are measured and pinned. The phone MJPEG adapter uses Pillow for JPEG decode.

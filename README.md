@@ -13,8 +13,9 @@ The workspace initially contained engineering specifications but no application 
 - Python 3.12.x, pinned by `.python-version` and `pyproject.toml`.
 - NumPy is pinned in `pyproject.toml` and `requirements.lock` for PatchCore's
   numerical core.
-- Torch/torchvision/Pillow/scipy remain optional until the workstation runtime
-  and explicit weight-acquisition procedure are verified.
+- Torch/torchvision/scipy remain optional until the workstation runtime and
+  explicit weight-acquisition procedure are verified. Pillow is pinned because
+  the phone MJPEG adapter decodes JPEG frames locally.
 
 ## Setup
 
