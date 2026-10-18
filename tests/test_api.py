@@ -1,4 +1,5 @@
 import json
+import base64
 from pathlib import Path
 import tempfile
 import unittest
@@ -109,6 +110,29 @@ class InspectionApiTests(unittest.TestCase):
                 )[1]
                 self.assertEqual(record["outcome"], "UNVERIFIED")
                 self.assertEqual(record["reason_codes"], ["IMAGE_INVALID"])
+            finally:
+                api.store.close()
+
+    def test_image_upload_stores_valid_image_under_image_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            api = InspectionApi(InspectionStore(), image_root=directory)
+            try:
+                image_bytes = b"P6\n1 1\n255\n\xff\x00\x00"
+                status, payload = api.handle(
+                    "POST", "/api/v1/images",
+                    json.dumps({"filename": "sample.ppm", "data_base64": base64.b64encode(image_bytes).decode()}).encode(),
+                )
+                self.assertEqual(status, 201)
+                self.assertTrue((Path(directory) / payload["image_path"]).is_file())
+            finally:
+                api.store.close()
+
+    def test_image_upload_rejects_corrupt_data(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            api = InspectionApi(InspectionStore(), image_root=directory)
+            try:
+                with self.assertRaisesRegex(Exception, "valid base64 image"):
+                    api.handle("POST", "/api/v1/images", json.dumps({"filename": "bad.png", "data_base64": base64.b64encode(b"not-image").decode()}).encode())
             finally:
                 api.store.close()
 

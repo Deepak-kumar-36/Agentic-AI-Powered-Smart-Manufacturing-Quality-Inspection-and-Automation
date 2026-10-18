@@ -8,12 +8,17 @@ scores or decisions.
 from __future__ import annotations
 
 from dataclasses import asdict
+import base64
+from io import BytesIO
 import json
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Mapping, Protocol
 from urllib.parse import parse_qs, urlsplit
+from uuid import uuid4
+
+from PIL import Image
 
 from .persistence import InspectionRecord, InspectionStore
 from .policy import DecisionPolicy, InspectionInput, ModelEvidence, reason_values
@@ -69,6 +74,8 @@ class InspectionApi:
                 return 200, {"ready": True, "components": {"database": "ready", "model": "ready" if self.model else "not_ready", "camera": "not_configured", "controller": "disabled"}}
             if method == "GET" and route == "/api/v1/system/status":
                 return 200, {"mode": "software_only", "actuation_enabled": False, "model": "ready" if self.model else "not_ready", "camera": "not_configured", "database": "ready"}
+            if method == "POST" and route == "/api/v1/images":
+                return self._upload_image(body)
             if method == "GET" and route == "/api/v1/inspections":
                 limit = int(parse_qs(parsed.query).get("limit", [50])[0])
                 return 200, {"items": [_record_payload(item) for item in self.store.list(limit)]}
@@ -108,6 +115,31 @@ class InspectionApi:
         if record.outcome is None:
             record = self._decide(record.inspection_id, payload)
         return 201, _record_payload(record)
+
+    def _upload_image(self, body: bytes) -> tuple[int, dict[str, Any]]:
+        if self.image_root is None:
+            raise ApiError(503, "IMAGE_ROOT_NOT_CONFIGURED", "image upload requires a configured image root")
+        if len(body) > 12 * 1024 * 1024:
+            raise ApiError(413, "UPLOAD_TOO_LARGE", "uploaded image request exceeds 12 MiB")
+        try:
+            payload = json.loads(body.decode("utf-8"))
+            filename = payload["filename"]
+            encoded = payload["data_base64"]
+            if not isinstance(filename, str) or not isinstance(encoded, str):
+                raise ValueError("filename and data_base64 are required")
+            raw = base64.b64decode(encoded, validate=True)
+            with Image.open(BytesIO(raw)) as image:
+                image.verify()
+        except (KeyError, TypeError, ValueError, UnicodeDecodeError, json.JSONDecodeError, OSError) as exc:
+            raise ApiError(400, "INVALID_IMAGE_UPLOAD", "filename and valid base64 image data are required") from exc
+        suffix = Path(filename).suffix.lower()
+        if suffix not in {".png", ".jpg", ".jpeg", ".webp", ".ppm"}:
+            suffix = ".png"
+        stored_name = f"dashboard-{uuid4().hex}{suffix}"
+        target = self.image_root / stored_name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(raw)
+        return 201, {"image_path": stored_name, "bytes": len(raw)}
 
     def _decide(self, inspection_id: str, payload: dict[str, Any]) -> InspectionRecord:
         category = payload["category"].strip()

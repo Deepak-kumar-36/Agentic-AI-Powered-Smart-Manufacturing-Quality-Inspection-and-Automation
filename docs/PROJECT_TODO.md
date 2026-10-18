@@ -89,11 +89,12 @@ Legend: `[x]` verified complete, `[~]` implemented or partially evidenced, `[ ]`
 
 ## 7. Dashboard and operator workflow
 
-- [ ] Define the frontend stack and API client contract.
-- [ ] Build status, inspection history, evidence, and event timeline views.
+- [x] Define a dependency-free browser dashboard against the existing HTTP API contract.
+- [x] Build status, inspection history, evidence, and event timeline views.
+- [x] Add local image upload into the configured API image root.
 - [ ] Keep visual outcome separate from physical action state.
-- [ ] Add accessible operator states, error handling, and review workflows.
-- [ ] Add frontend tests against the real API contract.
+- [x] Add accessible operator states and clear API error handling.
+- [~] Add frontend smoke coverage against the real API contract; full browser automation remains open.
 
 ## 8. ESP32, machine actions, and safety
 

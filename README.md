@@ -139,10 +139,9 @@ API response includes supported evidence fields (`evidence.heatmap_url`,
 images; the current record contract does not persist evidence images, so the
 dashboard explains when none is available.
 
-Because the API accepts `image_path` JSON and does not accept multipart uploads,
-the file chooser is a local preview/convenience control only. Copy the chosen
-image into the directory passed as `--image-root`, then enter its relative path
-in the form. The browser never claims that the selected file was uploaded.
+The file chooser uploads the selected image to the configured local image root
+through `POST /api/v1/images`, then fills the returned safe relative path into
+the inspection form. The upload is local-only and rejects corrupt image data.
 
 Run the API and static dashboard in separate terminals:
 
@@ -157,7 +156,7 @@ python -m http.server 4173 --directory dashboard
 Open <http://127.0.0.1:4173/>. To use another API origin, open
 `http://127.0.0.1:4173/?api=http://127.0.0.1:8000` (the default is already
 `http://127.0.0.1:8000`). The API includes local-development CORS headers and
-supports the browser's `OPTIONS` preflight; no new API endpoint was added.
+supports the browser's `OPTIONS` preflight.
 
 ### Dashboard smoke test
 
