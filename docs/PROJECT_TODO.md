@@ -79,8 +79,9 @@ Legend: `[x]` verified complete, `[~]` implemented or partially evidenced, `[ ]`
 - [x] Implement the Linux V4L2 adapter through an isolated ffmpeg raw-frame process.
 - [x] Implement a runtime-configured local-network MJPEG adapter for phone cameras.
 - [x] Add a phone-camera smoke-test CLI that writes only an explicitly chosen local frame artifact.
+- [x] Add a supervised, read-only phone shadow-inference loop using the existing API/model/policy path.
 - [ ] Confirm whether `/dev/video0` is the intended inspection camera or replace it with the selected phone/UVC source.
-- [ ] Verify the chosen phone app's MJPEG endpoint and run the smoke test on the trusted local network.
+- [ ] Verify the chosen phone app's MJPEG endpoint and run the shadow loop while the phone is online.
 - [ ] Run the camera-only acceptance matrix across three independent start/stop sessions.
 - [ ] Measure camera-to-decision latency on the target workstation.
 - [ ] Verify lighting, framing, focus, and defect visibility for the selected product.

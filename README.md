@@ -181,6 +181,34 @@ frame, validates freshness and sequence identity, and reports the stream health.
 The phone adapter is transport-ready, but it is not yet wired to a live model
 decision loop or physical actuation.
 
+### Phone-camera shadow inference
+
+After the phone stream smoke test succeeds, run one or more supervised,
+read-only model-backed captures:
+
+```bash
+.venv/bin/python -m app.phone_shadow \
+  --url 'http://PHONE_IP:8080/video' \
+  --category bottle \
+  --metadata artifacts/efficientad_s_release/run_metadata.json \
+  --artifacts artifacts/efficientad_s_release \
+  --teacher models/efficientad/teacher_small.pth \
+  --image-root data/phone-shadow \
+  --db data/inspection.sqlite3 \
+  --threshold bottle:0.1209134872:0.5 \
+  --threshold screw:0.2644167006:0.5 \
+  --threshold capsule:0.1169489183:0.5 \
+  --device cpu \
+  --count 1
+```
+
+This captures a fresh phone frame, validates it, saves it under the configured
+image root, invokes the existing server-side model and policy, and persists the
+inspection plus event history. It has no controller or actuation path. Use
+`--count` and `--interval-ms` for a bounded supervised run. If the phone is
+offline or the stream fails, the command reports `UNVERIFIED` and does not
+create a false inspection decision.
+
 When replacing a reviewed checkpoint, replace it atomically and invalidate the
 resident cache before serving new requests:
 
