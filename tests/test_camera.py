@@ -3,7 +3,7 @@ import unittest
 
 import numpy as np
 
-from app.camera import CameraError, CameraFrame, FramePolicy, FreshFrameSelector, validate_frame
+from app.camera import CameraError, CameraFrame, FramePolicy, FreshFrameSelector, MjpegCameraSource, extract_jpeg, validate_frame
 
 
 def frame(sequence: int = 1, *, captured: datetime | None = None, shape=(64, 64, 3)) -> CameraFrame:
@@ -12,6 +12,16 @@ def frame(sequence: int = 1, *, captured: datetime | None = None, shape=(64, 64,
 
 
 class CameraTests(unittest.TestCase):
+    def test_extract_jpeg_handles_split_mjpeg_chunks(self) -> None:
+        buffer = bytearray(b"noise\xff\xd8first")
+        self.assertIsNone(extract_jpeg(buffer))
+        buffer.extend(b"second\xff\xd9trailing")
+        self.assertEqual(extract_jpeg(buffer), b"\xff\xd8firstsecond\xff\xd9")
+
+    def test_phone_camera_requires_absolute_http_url(self) -> None:
+        with self.assertRaises(ValueError):
+            MjpegCameraSource("phone-camera/video")
+
     def test_valid_frame_is_accepted(self) -> None:
         accepted = FreshFrameSelector().accept(frame(), now=datetime.now(timezone.utc))
         self.assertEqual(accepted.sequence_no, 1)

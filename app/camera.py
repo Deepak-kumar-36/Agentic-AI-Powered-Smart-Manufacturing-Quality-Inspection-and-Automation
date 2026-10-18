@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from io import BytesIO
 import os
 import select
 import subprocess
 import time
 from typing import Any, Protocol
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 import numpy as np
 
@@ -233,3 +236,115 @@ class V4L2CameraSource:
             process.kill()
             process.wait()
         time.sleep(0)
+
+
+def extract_jpeg(buffer: bytearray) -> bytes | None:
+    """Extract one complete JPEG from an MJPEG byte buffer."""
+    start = buffer.find(b"\xff\xd8")
+    if start < 0:
+        if len(buffer) > 1:
+            del buffer[:-1]
+        return None
+    end = buffer.find(b"\xff\xd9", start + 2)
+    if end < 0:
+        if start:
+            del buffer[:start]
+        return None
+    end += 2
+    payload = bytes(buffer[start:end])
+    del buffer[:end]
+    return payload
+
+
+class MjpegCameraSource:
+    """Read JPEG frames from a phone's local-network MJPEG endpoint.
+
+    Common Android camera apps expose an endpoint similar to
+    ``http://192.168.x.x:8080/video``. The URL is runtime configuration and must
+    never be committed because it can contain a private address or token.
+    """
+
+    def __init__(self, url: str, *, camera_id: str = "phone-mjpeg", chunk_size: int = 65536) -> None:
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("phone camera URL must be an absolute HTTP(S) URL")
+        if chunk_size < 1024:
+            raise ValueError("chunk_size is too small")
+        self.url = url
+        self.camera_id = camera_id
+        self.chunk_size = chunk_size
+        self._response: Any | None = None
+        self._buffer = bytearray()
+        self._sequence = 0
+        self._frames_read = 0
+        self._last_error: str | None = None
+
+    def open(self) -> None:
+        if self._response is not None:
+            return
+        request = Request(self.url, headers={"User-Agent": "manufacturing-inspection/0.1"})
+        try:
+            self._response = urlopen(request, timeout=5)
+        except OSError as exc:
+            self._last_error = str(exc)
+            raise CameraError(f"unable to open phone camera stream: {exc}") from exc
+
+    def read(self, timeout_ms: int) -> CameraFrame | None:
+        if timeout_ms < 1:
+            raise ValueError("timeout_ms must be positive")
+        self.open()
+        response = self._response
+        if response is None:
+            self._last_error = "phone camera stream is not open"
+            return None
+        # urllib's socket timeout is set per read so a disconnected phone cannot
+        # leave the capture worker blocked indefinitely.
+        try:
+            response.fp.raw._sock.settimeout(timeout_ms / 1000)  # type: ignore[union-attr]
+            while True:
+                jpeg = extract_jpeg(self._buffer)
+                if jpeg is not None:
+                    break
+                chunk = response.read(self.chunk_size)
+                if not chunk:
+                    self._last_error = "phone camera stream ended"
+                    return None
+                self._buffer.extend(chunk)
+        except (OSError, TimeoutError) as exc:
+            self._last_error = f"phone camera read failed: {exc}"
+            return None
+        try:
+            from PIL import Image
+
+            with Image.open(BytesIO(jpeg)) as image:
+                rgb = np.asarray(image.convert("RGB"), dtype=np.uint8).copy()
+        except Exception as exc:  # Pillow reports several decoder-specific errors.
+            self._last_error = f"phone camera JPEG decode failed: {exc}"
+            return None
+        self._sequence += 1
+        self._frames_read += 1
+        self._last_error = None
+        return CameraFrame(
+            rgb,
+            datetime.now(timezone.utc).isoformat(),
+            self.camera_id,
+            self._sequence,
+            rgb.shape[1],
+            rgb.shape[0],
+        )
+
+    def health(self) -> dict[str, Any]:
+        return {
+            "camera_id": self.camera_id,
+            "transport": "http-mjpeg",
+            "url_configured": bool(self.url),
+            "open": self._response is not None,
+            "frames_read": self._frames_read,
+            "last_error": self._last_error,
+        }
+
+    def close(self) -> None:
+        response, self._response = self._response, None
+        self._buffer.clear()
+        if response is not None:
+            response.close()

@@ -162,6 +162,24 @@ finally:
 
 The adapter uses the system `ffmpeg` executable and emits RGB `uint8` frames with camera identity, UTC capture timestamp, dimensions, and monotonic sequence numbers. A successful read does not qualify the camera for actuation; run the camera acceptance matrix in `Document_05_Phone_Camera_Laptop_Setup.md` first.
 
+### Phone camera setup
+
+For a low-cost camera, use an Android camera app that exposes a local MJPEG
+endpoint (for example, an IP-camera/MJPEG mode). Connect the phone and laptop to
+the same trusted local network, keep the URL runtime-only, and smoke-test it:
+
+```bash
+python -m app.phone_camera_smoke \
+  --url 'http://PHONE_IP:8080/video' \
+  --output data/phone-camera-frame.ppm
+```
+
+Replace `PHONE_IP` with the address shown by the phone app. Do not commit the
+address, stream URL, credentials, or tokens. The command writes a local PPM
+frame, validates freshness and sequence identity, and reports the stream health.
+The phone adapter is transport-ready, but it is not yet wired to a live model
+decision loop or physical actuation.
+
 When replacing a reviewed checkpoint, replace it atomically and invalidate the
 resident cache before serving new requests:
 
