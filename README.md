@@ -128,6 +128,45 @@ curl http://127.0.0.1:8000/health/live
 curl http://127.0.0.1:8000/health/ready
 ```
 
+## Browser dashboard
+
+`dashboard/index.html` is a dependency-free browser preview for the existing
+HTTP API. It reads readiness and system status, submits inspections through the
+existing JSON contract, shows outcomes/reason codes and scores, lists stored
+inspection history, and loads the selected inspection's event timeline. If an
+API response includes supported evidence fields (`evidence.heatmap_url`,
+`evidence.overlay_url`, `heatmap_url`, or `evidence_url`), it displays those
+images; the current record contract does not persist evidence images, so the
+dashboard explains when none is available.
+
+Because the API accepts `image_path` JSON and does not accept multipart uploads,
+the file chooser is a local preview/convenience control only. Copy the chosen
+image into the directory passed as `--image-root`, then enter its relative path
+in the form. The browser never claims that the selected file was uploaded.
+
+Run the API and static dashboard in separate terminals:
+
+```bash
+# Terminal 1: API (use the reproducible app.serve command above when model-backed)
+python -c 'from app.api import serve; serve()'
+
+# Terminal 2: static browser server
+python -m http.server 4173 --directory dashboard
+```
+
+Open <http://127.0.0.1:4173/>. To use another API origin, open
+`http://127.0.0.1:4173/?api=http://127.0.0.1:8000` (the default is already
+`http://127.0.0.1:8000`). The API includes local-development CORS headers and
+supports the browser's `OPTIONS` preflight; no new API endpoint was added.
+
+### Dashboard smoke test
+
+With both servers running, verify that the page shows **API connected**, that
+the **Refresh** button loads the history table, and that submitting a relative
+path creates a record or shows the API's clear error. Click a history row and
+verify that its decision and event timeline load. If the API has no configured
+model, the expected decision is `UNVERIFIED` with `MODEL_NOT_READY`.
+
 Submit a server-scored inspection using an image below `--image-root`:
 
 ```bash
