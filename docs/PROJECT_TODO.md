@@ -74,8 +74,9 @@ Legend: `[x]` verified complete, `[~]` implemented or partially evidenced, `[ ]`
 ## 6. Camera and capture
 
 - [ ] Decide the camera/phone device and transport protocol.
-- [ ] Implement a capture adapter with frame identity and capture timestamps.
-- [ ] Add stale-frame, disconnect, malformed-image, and freshness tests.
+- [x] Define a hardware-neutral capture adapter contract with frame identity and capture timestamps.
+- [x] Add stale-frame, replayed-sequence, malformed-image, and freshness tests.
+- [ ] Implement the selected V4L2/phone/network capture adapter.
 - [ ] Measure camera-to-decision latency on the target workstation.
 - [ ] Verify lighting, framing, focus, and defect visibility for the selected product.
 
