@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import os
+import select
+import subprocess
+import time
 from typing import Any, Protocol
 
 import numpy as np
@@ -94,3 +98,138 @@ class FreshFrameSelector:
             self._last_sequence.clear()
         else:
             self._last_sequence.pop(camera_id, None)
+
+
+class V4L2CameraSource:
+    """Read bounded RGB frames from a Linux V4L2 device through ffmpeg.
+
+    ffmpeg is intentionally kept outside the Python dependency graph. This makes
+    the adapter usable with the existing project environment while keeping the
+    transport-specific process isolated from model and policy code.
+    """
+
+    def __init__(
+        self,
+        device: str,
+        *,
+        width: int = 1280,
+        height: int = 720,
+        fps: int = 30,
+        input_format: str = "mjpeg",
+        ffmpeg_bin: str = "ffmpeg",
+    ) -> None:
+        if not device.startswith("/dev/video"):
+            raise ValueError("V4L2 device must be under /dev/video")
+        if min(width, height, fps) < 1:
+            raise ValueError("camera dimensions and fps must be positive")
+        self.device = device
+        self.width = width
+        self.height = height
+        self.fps = fps
+        self.input_format = input_format
+        self.ffmpeg_bin = ffmpeg_bin
+        self._process: subprocess.Popen[bytes] | None = None
+        self._sequence = 0
+        self._last_error: str | None = None
+        self._frames_read = 0
+
+    def open(self) -> None:
+        if self._process is not None:
+            return
+        command = [
+            self.ffmpeg_bin,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "v4l2",
+            "-input_format",
+            self.input_format,
+            "-video_size",
+            f"{self.width}x{self.height}",
+            "-framerate",
+            str(self.fps),
+            "-i",
+            self.device,
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "pipe:1",
+        ]
+        try:
+            self._process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                bufsize=0,
+            )
+        except OSError as exc:
+            self._last_error = str(exc)
+            raise CameraError(f"unable to open camera source: {exc}") from exc
+
+    def read(self, timeout_ms: int) -> CameraFrame | None:
+        if timeout_ms < 1:
+            raise ValueError("timeout_ms must be positive")
+        self.open()
+        process = self._process
+        if process is None or process.stdout is None:
+            self._last_error = "camera process has no stdout"
+            return None
+        frame_bytes = self.width * self.height * 3
+        deadline = time.monotonic() + timeout_ms / 1000
+        chunks: list[bytes] = []
+        remaining = frame_bytes
+        while remaining:
+            wait_seconds = deadline - time.monotonic()
+            if wait_seconds <= 0:
+                self._last_error = "camera read timed out"
+                return None
+            ready, _, _ = select.select([process.stdout], [], [], wait_seconds)
+            if not ready:
+                self._last_error = "camera read timed out"
+                return None
+            chunk = os.read(process.stdout.fileno(), remaining)
+            if not chunk:
+                self._last_error = "camera stream ended before a complete frame"
+                return None
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        payload = b"".join(chunks)
+        if len(payload) != frame_bytes:
+            self._last_error = "camera returned an incomplete frame"
+            return None
+        self._sequence += 1
+        self._frames_read += 1
+        self._last_error = None
+        return CameraFrame(
+            np.frombuffer(payload, dtype=np.uint8).reshape(self.height, self.width, 3),
+            datetime.now(timezone.utc).isoformat(),
+            self.device,
+            self._sequence,
+            self.width,
+            self.height,
+        )
+
+    def health(self) -> dict[str, Any]:
+        process = self._process
+        return {
+            "camera_id": self.device,
+            "transport": "v4l2-ffmpeg",
+            "configured": True,
+            "open": process is not None and process.poll() is None,
+            "frames_read": self._frames_read,
+            "last_error": self._last_error,
+        }
+
+    def close(self) -> None:
+        process, self._process = self._process, None
+        if process is None:
+            return
+        process.terminate()
+        try:
+            process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        time.sleep(0)

@@ -76,7 +76,9 @@ Legend: `[x]` verified complete, `[~]` implemented or partially evidenced, `[ ]`
 - [ ] Decide the camera/phone device and transport protocol.
 - [x] Define a hardware-neutral capture adapter contract with frame identity and capture timestamps.
 - [x] Add stale-frame, replayed-sequence, malformed-image, and freshness tests.
-- [ ] Implement the selected V4L2/phone/network capture adapter.
+- [x] Implement the Linux V4L2 adapter through an isolated ffmpeg raw-frame process.
+- [ ] Confirm whether `/dev/video0` is the intended inspection camera or replace it with the selected phone/UVC source.
+- [ ] Run the camera-only acceptance matrix across three independent start/stop sessions.
 - [ ] Measure camera-to-decision latency on the target workstation.
 - [ ] Verify lighting, framing, focus, and defect visibility for the selected product.
 

@@ -4,7 +4,7 @@ Local-first foundation for a traceable manufacturing visual-inspection platform.
 
 ## Current evidence boundary
 
-The workspace initially contained engineering specifications but no application or firmware repository, model artifact, dataset, camera, or ESP32 hardware. The current implementation contains a dependency-free deterministic decision policy plus a dependency-lazy native EfficientAD-S checkpoint adapter. It does **not** claim camera integration, dashboard functionality, firmware behavior, hardware verification, or production readiness.
+The workspace initially contained engineering specifications but no application or firmware repository, model artifact, dataset, camera, or ESP32 hardware. The current implementation contains a dependency-free deterministic decision policy, a dependency-lazy native EfficientAD-S checkpoint adapter, and a hardware-neutral V4L2 frame adapter. It does **not** claim live camera qualification, dashboard functionality, firmware behavior, hardware verification, or production readiness.
 
 `PASS`, `FAIL`, and `UNVERIFIED` are explicit. Invalid/stale input, unavailable models, invalid scores, and incompatible model releases fail closed to `UNVERIFIED`.
 
@@ -138,6 +138,29 @@ curl -X POST http://127.0.0.1:8000/api/v1/inspections \
 
 The client must not send `score` or `outcome`; those fields are ignored and the
 decision is produced only from the configured server-side model and policy.
+
+### Camera adapter smoke test
+
+Linux V4L2 sources can be read through the hardware-neutral camera contract without adding OpenCV to the project dependencies:
+
+```python
+from datetime import datetime, timezone
+
+from app.camera import FramePolicy, FreshFrameSelector, V4L2CameraSource
+
+source = V4L2CameraSource("/dev/video0", width=640, height=480, fps=30)
+selector = FreshFrameSelector(FramePolicy(max_age_ms=1000))
+try:
+    frame = source.read(timeout_ms=3000)
+    if frame is None:
+        raise RuntimeError(source.health())
+    accepted = selector.accept(frame, now=datetime.now(timezone.utc))
+    print(accepted.frame.shape, accepted.sequence_no)
+finally:
+    source.close()
+```
+
+The adapter uses the system `ffmpeg` executable and emits RGB `uint8` frames with camera identity, UTC capture timestamp, dimensions, and monotonic sequence numbers. A successful read does not qualify the camera for actuation; run the camera acceptance matrix in `Document_05_Phone_Camera_Laptop_Setup.md` first.
 
 When replacing a reviewed checkpoint, replace it atomically and invalidate the
 resident cache before serving new requests:
