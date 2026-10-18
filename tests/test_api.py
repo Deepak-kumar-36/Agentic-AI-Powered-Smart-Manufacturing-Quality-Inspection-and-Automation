@@ -12,8 +12,9 @@ from app.policy import DecisionPolicy
 class FakeEvidence:
     model_version = "efficientad-s-native-v1"
 
-    def __init__(self, score: float) -> None:
+    def __init__(self, score: float, heatmap=None) -> None:
         self.score = score
+        self.heatmap = heatmap
 
 
 class FakeModel:
@@ -133,6 +134,26 @@ class InspectionApiTests(unittest.TestCase):
             try:
                 with self.assertRaisesRegex(Exception, "valid base64 image"):
                     api.handle("POST", "/api/v1/images", json.dumps({"filename": "bad.png", "data_base64": base64.b64encode(b"not-image").decode()}).encode())
+            finally:
+                api.store.close()
+
+    def test_heatmap_evidence_survives_read_back(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "sample.png"
+            image.write_bytes(b"image-placeholder")
+            class HeatmapModel(FakeModel):
+                def score(self, _category: str, _image: str | Path) -> FakeEvidence:
+                    return FakeEvidence(0.1, [[0.0, 1.0], [0.5, 0.25]])
+            api = InspectionApi(
+                InspectionStore(), model=HeatmapModel(0.1),
+                policies={"bottle": DecisionPolicy("policy-1", frozenset({"efficientad-s-native-v1"}), 0.2, 0.8)},
+                image_root=directory,
+            )
+            try:
+                record = api.handle("POST", "/api/v1/inspections", json.dumps({"category": "bottle", "image_path": "sample.png"}).encode(), {"Idempotency-Key": "heatmap"})[1]
+                self.assertTrue(record["evidence"]["heatmap_url"].startswith("data:image/png;base64,"))
+                loaded = api.handle("GET", f"/api/v1/inspections/{record['inspection_id']}")[1]
+                self.assertEqual(loaded["evidence"], record["evidence"])
             finally:
                 api.store.close()
 

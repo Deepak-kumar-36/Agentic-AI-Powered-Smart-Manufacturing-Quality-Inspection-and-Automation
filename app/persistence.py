@@ -32,6 +32,7 @@ class InspectionRecord:
     policy_version: str | None
     model_version: str | None
     score: float | None
+    evidence: dict[str, Any]
 
 
 class InspectionStore:
@@ -64,6 +65,7 @@ class InspectionStore:
                     policy_version TEXT,
                     model_version TEXT,
                     score REAL,
+                    evidence_json TEXT NOT NULL DEFAULT '{}',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
@@ -97,6 +99,10 @@ class InspectionStore:
                     "INSERT INTO inspections (inspection_id, idempotency_key, request_hash, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
                     (inspection_id, idempotency_key, request_hash, "CREATED", now, now),
                 )
+                try:
+                    self.connection.execute("ALTER TABLE inspections ADD COLUMN evidence_json TEXT NOT NULL DEFAULT '{}'")
+                except sqlite3.OperationalError:
+                    pass
                 self._event(inspection_id, "inspection.created", payload)
             return self.get(inspection_id)
 
@@ -109,6 +115,7 @@ class InspectionStore:
         policy_version: str,
         model_version: str | None,
         score: float | None,
+        evidence: dict[str, Any] | None = None,
     ) -> InspectionRecord:
         with self._lock:
             if outcome not in {"PASS", "FAIL", "UNVERIFIED"}:
@@ -116,8 +123,8 @@ class InspectionStore:
             now = _now()
             with self.connection:
                 updated = self.connection.execute(
-                    "UPDATE inspections SET status = ?, outcome = ?, reason_codes = ?, policy_version = ?, model_version = ?, score = ?, updated_at = ? WHERE inspection_id = ?",
-                    ("DECIDED", outcome, json.dumps(reason_codes), policy_version, model_version, score, now, inspection_id),
+                    "UPDATE inspections SET status = ?, outcome = ?, reason_codes = ?, policy_version = ?, model_version = ?, score = ?, evidence_json = ?, updated_at = ? WHERE inspection_id = ?",
+                    ("DECIDED", outcome, json.dumps(reason_codes), policy_version, model_version, score, json.dumps(evidence or {}, sort_keys=True), now, inspection_id),
                 ).rowcount
                 if updated != 1:
                     raise KeyError(inspection_id)
@@ -165,4 +172,5 @@ class InspectionStore:
             policy_version=row["policy_version"],
             model_version=row["model_version"],
             score=row["score"],
+            evidence=json.loads(row["evidence_json"] or "{}"),
         )

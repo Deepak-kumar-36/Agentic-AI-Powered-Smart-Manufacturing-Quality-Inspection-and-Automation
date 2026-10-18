@@ -19,6 +19,7 @@ from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
 
 from PIL import Image
+import numpy as np
 
 from .persistence import InspectionRecord, InspectionStore
 from .policy import DecisionPolicy, InspectionInput, ModelEvidence, reason_values
@@ -39,6 +40,7 @@ class ApiError(Exception):
 def _record_payload(record: InspectionRecord) -> dict[str, Any]:
     payload = asdict(record)
     payload["reason_codes"] = list(record.reason_codes)
+    payload["evidence"] = record.evidence
     return payload
 
 
@@ -171,6 +173,18 @@ class InspectionApi:
             InspectionInput(valid=True),
             ModelEvidence(model_version=evidence.model_version, score=evidence.score),
         )
+        evidence_payload: dict[str, Any] = {}
+        heatmap = getattr(evidence, "heatmap", None)
+        if heatmap is not None and self.image_root is not None:
+            values = np.asarray(heatmap, dtype=np.float32)
+            if values.size and np.isfinite(values).all():
+                normalized = values - values.min()
+                maximum = float(normalized.max())
+                if maximum > 0:
+                    normalized = normalized / maximum
+                image_buffer = BytesIO()
+                Image.fromarray(np.uint8(np.clip(normalized, 0, 1) * 255), mode="L").save(image_buffer, format="PNG")
+                evidence_payload["heatmap_url"] = "data:image/png;base64," + base64.b64encode(image_buffer.getvalue()).decode("ascii")
         return self.store.record_decision(
             inspection_id,
             outcome=decision.outcome.value,
@@ -178,6 +192,7 @@ class InspectionApi:
             policy_version=decision.policy_version,
             model_version=decision.model_version,
             score=decision.score,
+            evidence=evidence_payload,
         )
 
     def _image_path(self, value: Any) -> Path | None:
