@@ -143,18 +143,34 @@ curl http://127.0.0.1:8000/health/ready
 
 ## Browser dashboard
 
-`dashboard/index.html` is a dependency-free browser control room for the
-existing HTTP API. It uses a light manufacturing dashboard layout with a dark
-navigation rail, system/model/database status, image inspection workflow,
-decision evidence, model information, system health, outcome overview, score
-distribution, and recent inspections. It submits inspections through the
-existing JSON contract, shows outcomes/reason codes and scores, lists stored
-inspection history, and loads the selected inspection's event timeline. Charts
-are derived only from records returned by the API. Values that the API does not
-return (such as processing duration or an input-image URL) remain explicitly
-unknown rather than being estimated. If an API response includes supported
-evidence fields (`evidence.heatmap_url`, `evidence.overlay_url`, `heatmap_url`,
-or `evidence_url`), it displays those images; otherwise the dashboard explains
+`dashboard/index.html` is a dependency-free browser SPA for the existing HTTP
+API. It keeps the light industrial layout and uses one document with route
+sections driven by the URL hash. Sidebar routes are:
+
+- `#dashboard` — overview charts, latest result, runtime cards, and the bounded
+  recent-record table.
+- `#new-inspection` — focuses the existing upload and inspection form.
+- `#history` — focuses the stored-record table, with category, outcome, and
+  case-insensitive inspection-ID filters applied only to returned records (the
+  API request remains `limit=50`).
+- `#model` — model readiness/version state from `/api/v1/system/status`; model
+  upload, release, and reload are explicitly unavailable because no such API
+  routes exist.
+- `#dataset` — shows the API-history count and explicitly marks dataset
+  inventory and training as unavailable; it does not invent metrics.
+- `#health` — readiness component state from `/health/ready` and system mode
+  from `/api/v1/system/status`.
+- `#settings` — displays the current API origin and browser-local origin
+  setting; authentication and server configuration are unavailable.
+
+The SPA submits inspections through the existing JSON contract, shows
+outcomes/reason codes and scores, lists stored inspection history, and loads
+the selected inspection's event timeline. Charts are derived only from records
+returned by the API. Values that the API does not return (such as processing
+duration or an input-image URL) remain explicitly unknown rather than being
+estimated. If an API response includes supported evidence fields
+(`evidence.heatmap_url`, `evidence.overlay_url`, `heatmap_url`, or
+`evidence_url`), it displays those images; otherwise the dashboard explains
 that evidence is unavailable.
 
 The file chooser uploads the selected image to the configured local image root

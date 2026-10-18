@@ -51,3 +51,18 @@ test('nonfinite and negative values are excluded; extreme finite scores stay fin
   assert.equal(result.bins[9].upper, Number.MAX_VALUE);
   assert.ok(result.bins.every(bin => Number.isFinite(bin.lower) && Number.isFinite(bin.upper)));
 });
+
+test('dashboard contains the real SPA routes, bounded history controls, and API paths', () => {
+  const html = fs.readFileSync(require.resolve('../dashboard/index.html'), 'utf8');
+  for (const route of ['dashboard', 'new-inspection', 'history', 'model', 'dataset', 'health', 'settings']) {
+    assert.match(html, new RegExp(`data-route="${route}"`));
+  }
+  for (const id of ['dashboard-view', 'model-view', 'dataset', 'health-view', 'settings', 'historySearch', 'historyCategory', 'historyOutcome']) {
+    assert.match(html, new RegExp(`id="${id}"`));
+  }
+  for (const path of ['/health/ready', '/api/v1/system/status', '/api/v1/inspections?limit=50', '/api/v1/images']) {
+    assert.match(html, new RegExp(path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  }
+  assert.match(html, /No dataset or training endpoint is exposed/);
+  assert.doesNotMatch(html, /example|mock|fake|demo records/i);
+});
