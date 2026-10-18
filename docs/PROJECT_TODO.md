@@ -37,6 +37,7 @@ Legend: `[x]` verified complete, `[~]` implemented or partially evidenced, `[ ]`
 - [x] Add path-root enforcement for request images.
 - [x] Add the reviewed EfficientAD server CLI: `python -m app.serve`.
 - [x] Add category-specific model policy evaluation in the API.
+- [x] Add offline stored-image capture-to-decision workflow with restart tests.
 - [x] Add model cache reuse across requests.
 - [x] Add explicit per-category/all-category model cache reload.
 - [ ] Add structured production logging and correlation IDs.

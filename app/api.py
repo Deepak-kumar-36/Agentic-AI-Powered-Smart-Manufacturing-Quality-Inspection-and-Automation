@@ -119,7 +119,7 @@ class InspectionApi:
         policy = self.policies.get(category)
         if policy is None:
             return self.store.record_decision(
-                inspection_id, outcome="UNVERIFIED", reason_codes=["MODEL_NOT_READY"],
+                inspection_id, outcome="UNVERIFIED", reason_codes=["UNSUPPORTED_CATEGORY"],
                 policy_version="policy-unverified", model_version=None, score=None,
             )
         image_path = self._image_path(payload.get("image_path"))

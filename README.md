@@ -140,6 +140,30 @@ curl -X POST http://127.0.0.1:8000/api/v1/inspections \
 The client must not send `score` or `outcome`; those fields are ignored and the
 decision is produced only from the configured server-side model and policy.
 
+### Offline stored-image workflow
+
+The software-only end-to-end path can capture a checked-in image fixture through
+the same `CameraFrame` contract used by hardware sources, save a normalized PNG
+under the configured image root, and submit it through the API/policy/store path:
+
+```python
+from app.api import InspectionApi
+from app.offline_workflow import FileFrameSource, OfflineInspectionWorkflow
+
+workflow = OfflineInspectionWorkflow(
+    InspectionApi(store, model=model, policies=policies, image_root="data/captures"),
+    FileFrameSource("tests/fixtures/inspection/normal.ppm"),
+    "bottle",
+    "data/captures",
+)
+record = workflow.run("offline-smoke-001")
+```
+
+This path is covered offline by stored normal, anomalous, and corrupt image
+fixtures, plus missing-model, unsupported-category, and SQLite restart cases.
+It does not claim EfficientAD inference when optional ML dependencies or reviewed
+artifacts are unavailable.
+
 ### Camera adapter smoke test
 
 Linux V4L2 sources can be read through the hardware-neutral camera contract without adding OpenCV to the project dependencies:
@@ -241,10 +265,9 @@ permit the intended distribution or commercial use.
 
 ## Persistence status
 
-The first local SQLite inspection store is present in `app/persistence.py` with
-transactional creation, idempotency-key replay protection, decision read-back,
-and immutable event rows. It is not yet connected to an HTTP API or a real
-PatchCore release.
+The local SQLite inspection store in `app/persistence.py` is connected to the
+HTTP API and offline workflow. It provides transactional creation,
+idempotency-key replay protection, decision read-back, and immutable event rows.
 
 ## Documentation
 
