@@ -211,26 +211,15 @@ curl http://127.0.0.1:8000/health/ready
 
 ## Browser dashboard
 
-`dashboard/index.html` is a dependency-free browser SPA for the existing HTTP
-API. It keeps the light industrial layout and uses one document with route
-sections driven by the URL hash. Sidebar routes are:
+`dashboard/index.html` is a dependency-free browser dashboard for the existing
+HTTP API. It keeps the light industrial layout and presents the operator flow,
+latest decision, runtime/model metadata, health, analytics, and bounded history
+as one vertically scrollable workspace. The sidebar has one primary destination:
 
-- `#dashboard` — overview charts, latest result, runtime cards, and the bounded
-  recent-record table.
-- `#new-inspection` — focuses the existing upload and inspection form.
-- `#history` — focuses the stored-record table, with category, outcome, and
-  case-insensitive inspection-ID filters applied only to returned records (the
-  API request remains `limit=50`).
-- `#model` — model readiness, reviewed qualification status, compatible model
-  versions, policy contracts, and training-summary availability from
-  `/api/v1/system/metadata`; model upload, release, and reload are explicitly
-  unavailable because no such API routes exist.
-- `#dataset` — shows API-history counts and only the dataset/training summaries
-  returned by reviewed release metadata; it does not invent metrics.
-- `#health` — readiness component state from `/health/ready` and system mode
-  from `/api/v1/system/status`.
-- `#settings` — displays the current API origin and browser-local origin
-  setting; authentication and server configuration are unavailable.
+- `#dashboard` — the complete operator workspace. Inspection, history, model,
+  dataset/training, health, and settings data remain available in context rather
+  than as separate navigation pages. The URL `?api=...` still selects the API
+  origin; no fabricated dataset, training, or readiness values are shown.
 
 The SPA submits inspections through the existing JSON contract, shows
 outcomes/reason codes and scores, lists stored inspection history, and loads

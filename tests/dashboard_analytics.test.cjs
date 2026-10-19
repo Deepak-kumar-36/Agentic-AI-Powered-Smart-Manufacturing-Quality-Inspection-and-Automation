@@ -52,10 +52,11 @@ test('nonfinite and negative values are excluded; extreme finite scores stay fin
   assert.ok(result.bins.every(bin => Number.isFinite(bin.lower) && Number.isFinite(bin.upper)));
 });
 
-test('dashboard contains the real SPA routes, bounded history controls, and API paths', () => {
+test('dashboard is a single scrollable workspace with bounded history controls and API paths', () => {
   const html = fs.readFileSync(require.resolve('../dashboard/index.html'), 'utf8');
-  for (const route of ['dashboard', 'new-inspection', 'history', 'model', 'dataset', 'health', 'settings']) {
-    assert.match(html, new RegExp(`data-route="${route}"`));
+  assert.match(html, /data-route="dashboard"/);
+  for (const route of ['new-inspection', 'history', 'model', 'dataset', 'health', 'settings']) {
+    assert.doesNotMatch(html, new RegExp(`data-route="${route}"`));
   }
   for (const id of ['dashboard-view', 'model-view', 'dataset', 'health-view', 'settings', 'historySearch', 'historyCategory', 'historyOutcome']) {
     assert.match(html, new RegExp(`id="${id}"`));
