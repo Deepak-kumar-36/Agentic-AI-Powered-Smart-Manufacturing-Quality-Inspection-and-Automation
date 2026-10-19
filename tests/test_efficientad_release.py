@@ -57,6 +57,7 @@ class EfficientADReleaseTests(unittest.TestCase):
             release = load_reviewed_release(metadata, root, teacher, {"bottle": (0.2, 0.8)})
             contract = release.metadata_contract()
             self.assertEqual(contract["categories"], ["bottle"])
+            self.assertEqual(contract["model_versions"], ["efficientad-s-native-v1"])
             self.assertEqual(contract["policies"][0]["fail_threshold"], 0.8)
             self.assertEqual(contract["qualification"]["status"], "QUALIFIED")
             self.assertEqual(contract["training_summary"][0]["category"], "bottle")

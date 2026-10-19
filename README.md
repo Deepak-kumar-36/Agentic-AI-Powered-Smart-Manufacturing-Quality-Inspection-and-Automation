@@ -4,7 +4,7 @@ Local-first foundation for a traceable manufacturing visual-inspection platform.
 
 ## Current evidence boundary
 
-The workspace initially contained engineering specifications but no application or firmware repository, model artifact, dataset, camera, or ESP32 hardware. The current implementation contains a dependency-free deterministic decision policy, a dependency-lazy native EfficientAD-S checkpoint adapter, and a hardware-neutral V4L2 frame adapter. It does **not** claim live camera qualification, dashboard functionality, firmware behavior, hardware verification, or production readiness.
+The workspace initially contained engineering specifications but no application or firmware repository, model artifact, dataset, camera, or ESP32 hardware. The current implementation contains a dependency-free deterministic decision policy, a dependency-lazy native EfficientAD-S checkpoint adapter, a hardware-neutral V4L2 frame adapter, and a dependency-free browser dashboard. It does **not** claim live camera qualification, firmware behavior, hardware verification, or production readiness.
 
 `PASS`, `FAIL`, and `UNVERIFIED` are explicit. Invalid/stale input, unavailable models, invalid scores, and incompatible model releases fail closed to `UNVERIFIED`.
 
@@ -105,8 +105,8 @@ print(evidence.score, evidence.model_version)
 It never downloads weights, requires a category-specific native checkpoint, and
 rejects missing files, category mismatches, unsupported variants, missing
 checkpoint fields, and teacher-hash mismatches before returning evidence. The
-HTTP API is intentionally not wired to these artifacts until a full Kaggle run
-has been reviewed and the release thresholds are approved.
+HTTP API is wired to these artifacts only through the reviewed-release assembly
+point below; unqualified or incomplete artifacts cannot start a model-backed API.
 
 After review, `app.efficientad.release.load_reviewed_release` is the guarded
 assembly point for local use. It requires a full run whose metadata explicitly
@@ -153,11 +153,12 @@ sections driven by the URL hash. Sidebar routes are:
 - `#history` — focuses the stored-record table, with category, outcome, and
   case-insensitive inspection-ID filters applied only to returned records (the
   API request remains `limit=50`).
-- `#model` — model readiness/version state from `/api/v1/system/status`; model
-  upload, release, and reload are explicitly unavailable because no such API
-  routes exist.
-- `#dataset` — shows the API-history count and explicitly marks dataset
-  inventory and training as unavailable; it does not invent metrics.
+- `#model` — model readiness, reviewed qualification status, compatible model
+  versions, policy contracts, and training-summary availability from
+  `/api/v1/system/metadata`; model upload, release, and reload are explicitly
+  unavailable because no such API routes exist.
+- `#dataset` — shows API-history counts and only the dataset/training summaries
+  returned by reviewed release metadata; it does not invent metrics.
 - `#health` — readiness component state from `/health/ready` and system mode
   from `/api/v1/system/status`.
 - `#settings` — displays the current API origin and browser-local origin

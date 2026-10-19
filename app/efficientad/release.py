@@ -40,6 +40,7 @@ class ReviewedEfficientADRelease:
         ]
         return {
             "categories": sorted(self.policies),
+            "model_versions": sorted({version for policy in self.policies.values() for version in policy.compatible_model_versions}),
             "policies": policies,
             "qualification": {
                 "status": self.metadata.get("qualification_status"),

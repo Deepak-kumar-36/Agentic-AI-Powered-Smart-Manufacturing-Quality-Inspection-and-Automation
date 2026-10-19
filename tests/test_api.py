@@ -53,6 +53,7 @@ class InspectionApiTests(unittest.TestCase):
             InspectionStore(),
             metadata_provider=lambda: {
                 "categories": ["bottle"],
+                "model_versions": ["efficientad-s-native-v1"],
                 "qualification": {"status": "QUALIFIED"},
                 "training_summary": [{"category": "bottle", "samples": 12}],
                 "artifact_path": "/srv/private/checkpoint.pt",
@@ -161,6 +162,52 @@ class InspectionApiTests(unittest.TestCase):
             try:
                 with self.assertRaisesRegex(Exception, "valid base64 image"):
                     api.handle("POST", "/api/v1/images", json.dumps({"filename": "bad.png", "data_base64": base64.b64encode(b"not-image").decode()}).encode())
+            finally:
+                api.store.close()
+
+    def test_image_upload_rejects_oversized_request(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            api = InspectionApi(InspectionStore(), image_root=directory)
+            try:
+                with self.assertRaisesRegex(Exception, "12 MiB"):
+                    api.handle("POST", "/api/v1/images", b"x" * (12 * 1024 * 1024 + 1))
+            finally:
+                api.store.close()
+
+    def test_unsupported_category_is_unverified_with_configured_model(self) -> None:
+        api = InspectionApi(
+            InspectionStore(),
+            model=FakeModel(0.1),
+            policies={"bottle": DecisionPolicy("policy-1", frozenset({"efficientad-s-native-v1"}), 0.2, 0.8)},
+        )
+        try:
+            record = api.handle(
+                "POST", "/api/v1/inspections", json.dumps({"category": "cable"}).encode(),
+                {"Idempotency-Key": "unsupported-category"},
+            )[1]
+            self.assertEqual(record["outcome"], "UNVERIFIED")
+            self.assertEqual(record["reason_codes"], ["UNSUPPORTED_CATEGORY"])
+            self.assertIsNone(record["score"])
+        finally:
+            api.store.close()
+
+    def test_missing_heatmap_is_reported_without_fabricating_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "sample.png"
+            image.write_bytes(b"image-placeholder")
+            api = InspectionApi(
+                InspectionStore(),
+                model=FakeModel(0.1),
+                policies={"bottle": DecisionPolicy("policy-1", frozenset({"efficientad-s-native-v1"}), 0.2, 0.8)},
+                image_root=directory,
+            )
+            try:
+                record = api.handle(
+                    "POST", "/api/v1/inspections", json.dumps({"category": "bottle", "image_path": "sample.png"}).encode(),
+                    {"Idempotency-Key": "missing-heatmap"},
+                )[1]
+                self.assertEqual(record["outcome"], "PASS")
+                self.assertEqual(record["evidence"], {})
             finally:
                 api.store.close()
 

@@ -65,8 +65,14 @@ test('dashboard contains the real SPA routes, bounded history controls, and API 
   }
   assert.match(html, /does not fabricate dataset counts/);
   assert.match(html, /metadata\?\.categories/);
+  assert.match(html, /metadata\?\.model_versions/);
   assert.match(html, /metadata\?\.policies/);
   assert.match(html, /Policy thresholds/);
+  assert.match(html, /Request error/);
+  assert.match(html, /No heatmap or evidence image was returned/);
+  assert.match(html, /renderMetadataState\(null\)/);
+  assert.match(html, /releaseMetadata\.available/);
+  assert.match(html, /Idempotency-Key/);
   assert.doesNotMatch(html, /<button[^>]+(?:train|upload model|release|reload)/i);
   assert.doesNotMatch(html, /bottle, screw, capsule \(form options\)/i);
   assert.doesNotMatch(html, /example|mock|fake|demo records/i);

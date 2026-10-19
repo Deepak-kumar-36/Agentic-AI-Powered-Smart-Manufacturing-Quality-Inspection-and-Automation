@@ -52,6 +52,24 @@ class HttpSmokeTests(unittest.TestCase):
                 server.server_close()
                 store.close()
 
+    def test_missing_record_returns_json_404(self) -> None:
+        store = InspectionStore()
+        api = InspectionApi(store)
+        server = create_server(api, host="127.0.0.1", port=0)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            base = f"http://127.0.0.1:{server.server_port}"
+            with self.assertRaises(Exception) as context:
+                urlopen(f"{base}/api/v1/inspections/ins_missing")
+            response = context.exception
+            self.assertEqual(getattr(response, "status", None), 404)
+            self.assertEqual(json.load(response)["error"]["code"], "INSPECTION_NOT_FOUND")
+        finally:
+            server.shutdown()
+            server.server_close()
+            store.close()
+
 
 if __name__ == "__main__":
     unittest.main()
