@@ -43,6 +43,33 @@ class InspectionApiTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(ready["components"]["model"], "not_ready")
 
+    def test_metadata_is_honestly_unavailable_without_provider(self) -> None:
+        status, payload = self.api.handle("GET", "/api/v1/system/metadata")
+        self.assertEqual(status, 200)
+        self.assertEqual(payload, {"available": False, "reason": "METADATA_NOT_CONFIGURED"})
+
+    def test_metadata_is_returned_when_provider_is_configured(self) -> None:
+        api = InspectionApi(
+            InspectionStore(),
+            metadata_provider=lambda: {
+                "categories": ["bottle"],
+                "qualification": {"status": "QUALIFIED"},
+                "training_summary": [{"category": "bottle", "samples": 12}],
+                "artifact_path": "/srv/private/checkpoint.pt",
+                "api_key": "do-not-return",
+            },
+        )
+        try:
+            status, payload = api.handle("GET", "/api/v1/system/metadata")
+            self.assertEqual(status, 200)
+            self.assertTrue(payload["available"])
+            self.assertEqual(payload["categories"], ["bottle"])
+            self.assertEqual(payload["training_summary"][0]["samples"], 12)
+            self.assertNotIn("artifact_path", payload)
+            self.assertNotIn("api_key", payload)
+        finally:
+            api.store.close()
+
     def test_inspection_is_persisted_unverified_when_model_unavailable(self) -> None:
         status, record = self.api.handle(
             "POST",

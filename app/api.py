@@ -29,6 +29,10 @@ class ImageScorer(Protocol):
     def score(self, category: str, image: str | Path) -> Any: ...
 
 
+class MetadataProvider(Protocol):
+    def __call__(self) -> Mapping[str, Any]: ...
+
+
 class ApiError(Exception):
     def __init__(self, status: int, code: str, message: str) -> None:
         super().__init__(message)
@@ -44,6 +48,25 @@ def _record_payload(record: InspectionRecord) -> dict[str, Any]:
     return payload
 
 
+def _public_metadata(value: Any) -> Any:
+    """Keep provider output JSON-safe and free of locations or credentials."""
+    if isinstance(value, Mapping):
+        result: dict[str, Any] = {}
+        for key, item in value.items():
+            name = str(key).lower()
+            if any(token in name for token in ("path", "secret", "password", "token", "credential", "api_key")):
+                continue
+            result[str(key)] = _public_metadata(item)
+        return result
+    if isinstance(value, list):
+        return [_public_metadata(item) for item in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        if isinstance(value, str) and (value.startswith("/") or value.startswith("~")):
+            return None
+        return value
+    return None
+
+
 class InspectionApi:
     def __init__(
         self,
@@ -52,11 +75,13 @@ class InspectionApi:
         model: ImageScorer | None = None,
         policies: Mapping[str, DecisionPolicy] | None = None,
         image_root: str | Path | None = None,
+        metadata_provider: MetadataProvider | None = None,
     ) -> None:
         self.store = store or InspectionStore()
         self.model = model
         self.policies = dict(policies or {})
         self.image_root = Path(image_root).resolve() if image_root is not None else None
+        self.metadata_provider = metadata_provider
 
     def reload_model(self, category: str | None = None) -> list[str]:
         """Invalidate the injected model cache after reviewed artifact replacement."""
@@ -76,6 +101,8 @@ class InspectionApi:
                 return 200, {"ready": True, "components": {"database": "ready", "model": "ready" if self.model else "not_ready", "camera": "not_configured", "controller": "disabled"}}
             if method == "GET" and route == "/api/v1/system/status":
                 return 200, {"mode": "software_only", "actuation_enabled": False, "model": "ready" if self.model else "not_ready", "camera": "not_configured", "database": "ready"}
+            if method == "GET" and route == "/api/v1/system/metadata":
+                return self._metadata()
             if method == "POST" and route == "/api/v1/images":
                 return self._upload_image(body)
             if method == "GET" and route == "/api/v1/inspections":
@@ -98,6 +125,17 @@ class InspectionApi:
             raise ApiError(404, "INSPECTION_NOT_FOUND", str(exc.args[0])) from exc
         except (ValueError, json.JSONDecodeError) as exc:
             raise ApiError(400, "INVALID_REQUEST", str(exc)) from exc
+
+    def _metadata(self) -> tuple[int, dict[str, Any]]:
+        if self.metadata_provider is None:
+            return 200, {"available": False, "reason": "METADATA_NOT_CONFIGURED"}
+        try:
+            metadata = self.metadata_provider()
+        except Exception:
+            return 200, {"available": False, "reason": "METADATA_UNAVAILABLE"}
+        if not isinstance(metadata, Mapping):
+            return 200, {"available": False, "reason": "METADATA_INVALID"}
+        return 200, {**_public_metadata(metadata), "available": True}
 
     def _create(self, body: bytes, headers: dict[str, str]) -> tuple[int, dict[str, Any]]:
         if len(body) > 64 * 1024:
@@ -261,8 +299,9 @@ def serve(
     model: ImageScorer | None = None,
     policies: Mapping[str, DecisionPolicy] | None = None,
     image_root: str | Path | None = None,
+    metadata_provider: MetadataProvider | None = None,
 ) -> None:
-    api = InspectionApi(store, model=model, policies=policies, image_root=image_root)
+    api = InspectionApi(store, model=model, policies=policies, image_root=image_root, metadata_provider=metadata_provider)
     serve_api(api, host=host, port=port)
 
 

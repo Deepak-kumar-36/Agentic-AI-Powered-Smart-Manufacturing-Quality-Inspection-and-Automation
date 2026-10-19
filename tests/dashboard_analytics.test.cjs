@@ -60,9 +60,14 @@ test('dashboard contains the real SPA routes, bounded history controls, and API 
   for (const id of ['dashboard-view', 'model-view', 'dataset', 'health-view', 'settings', 'historySearch', 'historyCategory', 'historyOutcome']) {
     assert.match(html, new RegExp(`id="${id}"`));
   }
-  for (const path of ['/health/ready', '/api/v1/system/status', '/api/v1/inspections?limit=50', '/api/v1/images']) {
+  for (const path of ['/health/ready', '/api/v1/system/status', '/api/v1/system/metadata', '/api/v1/inspections?limit=50', '/api/v1/images']) {
     assert.match(html, new RegExp(path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
-  assert.match(html, /No dataset or training endpoint is exposed/);
+  assert.match(html, /does not fabricate dataset counts/);
+  assert.match(html, /metadata\?\.categories/);
+  assert.match(html, /metadata\?\.policies/);
+  assert.match(html, /Policy thresholds/);
+  assert.doesNotMatch(html, /<button[^>]+(?:train|upload model|release|reload)/i);
+  assert.doesNotMatch(html, /bottle, screw, capsule \(form options\)/i);
   assert.doesNotMatch(html, /example|mock|fake|demo records/i);
 });

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 from pathlib import Path
-from typing import Mapping
+from typing import Any, Mapping
 
 from .native import sha256_file
 from .runtime import NativeEfficientADRuntime
@@ -26,9 +26,58 @@ class ReviewedEfficientADRelease:
     policies: dict[str, DecisionPolicy]
     metadata: dict[str, object]
 
+    def metadata_contract(self) -> dict[str, Any]:
+        """Return dashboard-safe release metadata without filesystem locations."""
+        policies = [
+            {
+                "category": category,
+                "version": policy.version,
+                "pass_threshold": policy.pass_threshold,
+                "fail_threshold": policy.fail_threshold,
+                "compatible_model_versions": sorted(policy.compatible_model_versions),
+            }
+            for category, policy in sorted(self.policies.items())
+        ]
+        return {
+            "categories": sorted(self.policies),
+            "policies": policies,
+            "qualification": {
+                "status": self.metadata.get("qualification_status"),
+                "run_mode": self.metadata.get("run_mode"),
+                "implementation": self.metadata.get("implementation"),
+            },
+            "dataset_summary": _public_metadata(self.metadata.get("dataset_summary", self.metadata.get("dataset"))),
+            "training_summary": _public_metadata(self.metadata.get("training_summary")),
+        }
+
     def create_api(self, *, device: str = "cpu", image_root: str | Path | None = None, store=None) -> InspectionApi:
         runtime = NativeEfficientADRuntime(self.checkpoints, self.teacher_path, device=device)
-        return InspectionApi(store, model=runtime, policies=self.policies, image_root=image_root)
+        return InspectionApi(
+            store,
+            model=runtime,
+            policies=self.policies,
+            image_root=image_root,
+            metadata_provider=self.metadata_contract,
+        )
+
+
+def _public_metadata(value: Any) -> Any:
+    """Keep summaries JSON-safe while excluding locations and credential-like fields."""
+    if isinstance(value, dict):
+        result = {}
+        for key, item in value.items():
+            name = str(key).lower()
+            if any(token in name for token in ("path", "secret", "password", "token", "credential")):
+                continue
+            result[str(key)] = _public_metadata(item)
+        return result
+    if isinstance(value, list):
+        return [_public_metadata(item) for item in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        if isinstance(value, str) and (value.startswith("/") or value.startswith("~")):
+            return None
+        return value
+    return None
 
 
 def load_reviewed_release(

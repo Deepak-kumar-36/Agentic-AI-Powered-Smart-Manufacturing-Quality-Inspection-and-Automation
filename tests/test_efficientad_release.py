@@ -50,6 +50,19 @@ class EfficientADReleaseTests(unittest.TestCase):
             self.assertEqual(release.checkpoints["bottle"].name, "efficientad_s_bottle.pt")
             self.assertEqual(release.policies["bottle"].fail_threshold, 0.8)
 
+    def test_metadata_contract_contains_release_facts_without_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            metadata, teacher = self._metadata(root)
+            release = load_reviewed_release(metadata, root, teacher, {"bottle": (0.2, 0.8)})
+            contract = release.metadata_contract()
+            self.assertEqual(contract["categories"], ["bottle"])
+            self.assertEqual(contract["policies"][0]["fail_threshold"], 0.8)
+            self.assertEqual(contract["qualification"]["status"], "QUALIFIED")
+            self.assertEqual(contract["training_summary"][0]["category"], "bottle")
+            self.assertNotIn("teacher_path", json.dumps(contract))
+            self.assertNotIn(str(root), json.dumps(contract))
+
     def test_supervised_local_qualification_is_accepted(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
