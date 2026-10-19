@@ -41,6 +41,8 @@ class ReviewedEfficientADRelease:
         return {
             "categories": sorted(self.policies),
             "model_versions": sorted({version for policy in self.policies.values() for version in policy.compatible_model_versions}),
+            "active_model_version": self.metadata.get("model_version", NativeEfficientADRuntime.MODEL_VERSION),
+            "variant": self.metadata.get("variant", NativeEfficientADRuntime.VARIANT),
             "policies": policies,
             "qualification": {
                 "status": self.metadata.get("qualification_status"),
@@ -52,7 +54,11 @@ class ReviewedEfficientADRelease:
         }
 
     def create_api(self, *, device: str = "cpu", image_root: str | Path | None = None, store=None) -> InspectionApi:
-        runtime = NativeEfficientADRuntime(self.checkpoints, self.teacher_path, device=device)
+        runtime = NativeEfficientADRuntime(
+            self.checkpoints, self.teacher_path, device=device,
+            model_version=str(self.metadata.get("model_version", NativeEfficientADRuntime.MODEL_VERSION)),
+            variant=str(self.metadata.get("variant", NativeEfficientADRuntime.VARIANT)),
+        )
         return InspectionApi(
             store,
             model=runtime,
@@ -108,6 +114,13 @@ def load_reviewed_release(
         raise EfficientADReleaseError("release metadata is not explicitly qualified")
     if metadata.get("implementation") != "native":
         raise EfficientADReleaseError("release is not the native EfficientAD implementation")
+    model_version = metadata.get("model_version", NativeEfficientADRuntime.MODEL_VERSION)
+    variant = metadata.get("variant", NativeEfficientADRuntime.VARIANT)
+    checkpoint_subdir = metadata.get("checkpoint_subdir", "reference_teacher")
+    if not isinstance(model_version, str) or not model_version.strip() or not isinstance(variant, str) or not variant.strip():
+        raise EfficientADReleaseError("release model version or variant is invalid")
+    if not isinstance(checkpoint_subdir, str) or Path(checkpoint_subdir).is_absolute() or ".." in Path(checkpoint_subdir).parts:
+        raise EfficientADReleaseError("release checkpoint directory is unsafe")
     categories = metadata.get("categories")
     if not isinstance(categories, list) or not categories or any(not isinstance(item, str) for item in categories):
         raise EfficientADReleaseError("release categories are missing or invalid")
@@ -125,7 +138,7 @@ def load_reviewed_release(
     checkpoints: dict[str, Path] = {}
     policies: dict[str, DecisionPolicy] = {}
     for category in categories:
-        checkpoint = root / "reference_teacher" / category / f"efficientad_s_{category}.pt"
+        checkpoint = root / checkpoint_subdir / category / f"efficientad_s_{category}.pt"
         if not checkpoint.is_file():
             raise EfficientADReleaseError(f"checkpoint not found for {category}: {checkpoint}")
         expected_hash = by_category.get(category, {}).get("checkpoint_sha256")
@@ -133,8 +146,8 @@ def load_reviewed_release(
             raise EfficientADReleaseError(f"checkpoint hash does not match release metadata for {category}")
         pass_threshold, fail_threshold = policy_thresholds[category]
         policies[category] = DecisionPolicy(
-            version=f"efficientad-s-native-v1:{category}",
-            compatible_model_versions=frozenset({NativeEfficientADRuntime.MODEL_VERSION}),
+            version=f"{model_version}:{category}",
+            compatible_model_versions=frozenset({model_version}),
             pass_threshold=pass_threshold,
             fail_threshold=fail_threshold,
         )

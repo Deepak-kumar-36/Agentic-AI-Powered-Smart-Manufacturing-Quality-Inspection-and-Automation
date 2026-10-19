@@ -62,6 +62,74 @@ files, duplicate hashes, or anomaly masks are invalid or incomplete. The
 dataset's CC BY-NC-SA 4.0 terms must be reviewed before any use beyond
 permitted development/benchmark work.
 
+### Real capsule ingestion and validation
+
+Captured capsule data can be discovered without copying, downloading, or
+inventing files. The category root (or a parent containing `capsule/`) follows:
+
+```text
+capsule/
+  train/good/*.png
+  validation/good/*.png
+  validation/defects/<defect_type>/*.{png,jpg,...}
+  test/good/*.png
+  test/defects/<defect_type>/*.{png,jpg,...}
+```
+
+Run the reusable discovery path with:
+
+```bash
+python -c 'from app.efficientad.data import discover_real_capsule_manifest; discover_real_capsule_manifest("/path/to/capsule").write("/path/to/manifest.json")'
+```
+
+Each row contains `identifier`, `path`, `category`, `label`, `defect_type`,
+`physical_sample_id`, `capture_session`, `camera_id`, `width`, `height`,
+`split`, `mask_path`, and `sha256`. Optional `metadata.json` (or a configured
+CSV filename) is keyed by relative `path` or `identifier` and enriches the
+physical-sample, session, camera, label, defect, and mask fields. A metadata
+row with a null label remains invalid; labels are only inferred from the
+directory convention when metadata does not override them.
+
+`validate_manifest(manifest)` reports decode failures, missing/invalid labels,
+duplicate content hashes, and physical-sample or capture-session leakage across
+splits. Discovery fails closed when any of these checks fail. Masks are
+optional by default; pass `CapsuleDiscoveryConfig(require_masks=True)` when the
+capture protocol requires defect masks. No images are included in this
+repository.
+
+### Real-capsule adaptation and calibration on Kaggle
+
+No real-capsule photographs are present in this repository, so no adaptation
+run or improvement claim has been made. Keep product images in a private/local
+Kaggle Dataset and do not add them to Git. Before upload, obtain approval for
+the intended use, record retention/access restrictions, and assign stable
+physical-sample and capture-session identifiers. Avoid putting the same sample
+or session in more than one split.
+
+The adaptation notebook is `notebooks/efficientad_s_kaggle.ipynb`. In Kaggle:
+
+1. Attach the private real-capsule Dataset and set `REAL_CAPSULE_ROOT` to its
+   mount path (default: `/kaggle/input/real-capsules`).
+2. Run the manifest validation cell and stop on any decode, duplicate, label,
+   or split-leakage issue.
+3. Run the adaptation cell. It trains only from `train/good` and writes a new
+   `efficientad-s-native-real-capsule-v1` candidate under
+   `/kaggle/working/efficientad_s_real_capsule_v1`.
+4. Score the same validation and locked test manifest with both the existing
+   MVTec release and the candidate, producing `baseline_scores.csv` and
+   `adapted_scores.csv` with `sample_id,score` plus optional latency/model-size
+   columns.
+5. Run the comparison cell. It calibrates from validation only and reports
+   test AUROC/precision/recall/false-rejection/missed-defect metrics. It does
+   not qualify or activate the candidate.
+
+Only after human review of untouched test evidence, model hashes,
+preprocessing, threshold costs, and licensing may a new release metadata file
+be marked qualified. The release loader supports a new `model_version`,
+`variant`, and safe `checkpoint_subdir`, while the existing MVTec release
+remains available for rollback. Pixel-level metrics remain unavailable when
+the private dataset has no verified defect masks; masks are never invented.
+
 ## Docker
 
 ```bash

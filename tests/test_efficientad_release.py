@@ -73,6 +73,28 @@ class EfficientADReleaseTests(unittest.TestCase):
             release = load_reviewed_release(metadata, root, teacher, {"bottle": (0.2, 0.8)})
             self.assertEqual(release.metadata["qualification_status"], "QUALIFIED_FOR_SUPERVISED_LOCAL_API")
 
+    def test_real_capsule_release_uses_new_version_and_checkpoint_namespace(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            teacher = root / "teacher.pth"
+            teacher.write_bytes(b"teacher")
+            checkpoint = root / "real_capsule" / "capsule" / "efficientad_s_capsule.pt"
+            checkpoint.parent.mkdir(parents=True)
+            checkpoint.write_bytes(b"capsule-checkpoint")
+            digest = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
+            metadata = root / "run_metadata.json"
+            metadata.write_text(json.dumps({
+                "run_mode": "full", "qualification_status": "QUALIFIED",
+                "implementation": "native", "categories": ["capsule"],
+                "model_version": "efficientad-s-native-real-capsule-v1",
+                "variant": "EfficientAD-S-ReferenceTeacher-RealCapsule-v1",
+                "checkpoint_subdir": "real_capsule", "teacher_sha256": digest(teacher),
+                "training_summary": [{"category": "capsule", "checkpoint_sha256": digest(checkpoint)}],
+            }), encoding="utf-8")
+            release = load_reviewed_release(metadata, root, teacher, {"capsule": (0.1, 0.9)})
+            self.assertEqual(release.checkpoints["capsule"], checkpoint)
+            self.assertEqual(release.metadata_contract()["active_model_version"], "efficientad-s-native-real-capsule-v1")
+
 
 if __name__ == "__main__":
     unittest.main()

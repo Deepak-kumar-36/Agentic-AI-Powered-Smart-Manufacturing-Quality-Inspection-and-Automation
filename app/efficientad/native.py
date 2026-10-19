@@ -205,6 +205,7 @@ def train_category(
     batch_size: int = 1,
     device: str = "cuda",
     seed: int = 42,
+    variant: str = "EfficientAD-S-ReferenceTeacher-MVTecOnly",
 ) -> NativeRun:
     """Train one category using the reference-teacher, MVTec-only variant."""
     torch, Image, _, _ = _torch()
@@ -214,8 +215,9 @@ def train_category(
         raise ValueError("steps and batch_size must be positive")
     set_seed(seed)
     target = torch.device(device if device == "cpu" or torch.cuda.is_available() else "cpu")
-    root = Path(dataset_root) / category / "train" / "good"
-    paths = sorted(root.glob("*.png"))
+    category_root = Path(dataset_root) / category
+    root = category_root / "train" / "good" if (category_root / "train" / "good").is_dir() else Path(dataset_root) / "train" / "good"
+    paths = sorted(path for path in root.iterdir() if path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp", ".ppm"}) if root.is_dir() else []
     if not paths:
         raise ValueError(f"no training images found for {category}: {root}")
     transform = image_transform()
@@ -254,7 +256,7 @@ def train_category(
     student.eval(); ae.eval()
     output = Path(output_dir); output.mkdir(parents=True, exist_ok=True)
     checkpoint = output / f"efficientad_s_{category}.pt"
-    torch.save({"student": student.state_dict(), "autoencoder": ae.state_dict(), "teacher_mean": mean.cpu(), "teacher_std": std.cpu(), "category": category, "teacher_source": str(teacher_path), "teacher_sha256": sha256_file(teacher_path), "steps": steps, "seed": seed, "variant": "EfficientAD-S-ReferenceTeacher-MVTecOnly"}, checkpoint)
+    torch.save({"student": student.state_dict(), "autoencoder": ae.state_dict(), "teacher_mean": mean.cpu(), "teacher_std": std.cpu(), "category": category, "teacher_source": str(teacher_path), "teacher_sha256": sha256_file(teacher_path), "steps": steps, "seed": seed, "variant": variant}, checkpoint)
     return NativeRun(category, steps, checkpoint, [], [])
 
 

@@ -40,6 +40,8 @@ class NativeEfficientADRuntime:
         teacher_path: str | Path,
         *,
         device: str = "cpu",
+        model_version: str = MODEL_VERSION,
+        variant: str = VARIANT,
     ) -> None:
         if not checkpoints:
             raise ValueError("at least one category checkpoint is required")
@@ -48,6 +50,8 @@ class NativeEfficientADRuntime:
         self.checkpoints = {category: Path(path) for category, path in checkpoints.items()}
         self.teacher_path = Path(teacher_path)
         self.device = device
+        self.model_version = model_version
+        self.variant = variant
         self._bundles: dict[str, Any] = {}
         self._validate_paths()
         self._validate_teacher_dependency()
@@ -84,7 +88,7 @@ class NativeEfficientADRuntime:
             raise EfficientADRuntimeError(f"checkpoint payload is not a mapping: {path}")
         if payload.get("category") != category:
             raise EfficientADRuntimeError(f"checkpoint category mismatch for {category}: {path}")
-        if payload.get("variant") != self.VARIANT:
+        if payload.get("variant") != self.variant:
             raise EfficientADRuntimeError(f"unsupported EfficientAD variant: {path}")
         expected_teacher = payload.get("teacher_sha256")
         actual_teacher = sha256_file(self.teacher_path)
@@ -124,4 +128,4 @@ class NativeEfficientADRuntime:
         if category not in self._bundles:
             self._bundles[category] = load_model_bundle(checkpoint, self.teacher_path, self.device)
         score, heatmap = infer_loaded(self._bundles[category], image)
-        return EfficientADImageScore(category, Path(image), score, heatmap, self.MODEL_VERSION, checkpoint)
+        return EfficientADImageScore(category, Path(image), score, heatmap, self.model_version, checkpoint)
