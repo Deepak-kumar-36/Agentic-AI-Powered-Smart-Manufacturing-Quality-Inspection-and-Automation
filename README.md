@@ -235,6 +235,25 @@ The file chooser uploads the selected image to the configured local image root
 through `POST /api/v1/images`, then fills the returned safe relative path into
 the inspection form. The upload is local-only and rejects corrupt image data.
 
+### Human review and annotation
+
+Selecting an inspection opens an additive Human Review form. Reviewers can record
+`CONFIRMED_NORMAL`, `CONFIRMED_DEFECT`, or `INCONCLUSIVE`, with an optional
+controlled defect type (`scratch`, `dent`, `crack`, `contamination`,
+`misalignment`, or `other`) and a note up to 2,000 characters. Reviews never
+modify the original AI outcome, score, model version, policy, or evidence.
+
+The API stores every review and its audit event through:
+
+- `POST /api/v1/inspections/<inspection_id>/reviews`
+- `GET /api/v1/inspections/<inspection_id>/reviews`
+
+Review records retain server timestamps, the inspection's model version, and an
+available input-image hash. Reviewer authentication is not implemented in this
+local prototype, so the UI does not claim verified reviewer identity. Reviews
+are preserved separately from dataset manifests and are not automatically
+approved as training data.
+
 Run the API and static dashboard in separate terminals:
 
 ```bash

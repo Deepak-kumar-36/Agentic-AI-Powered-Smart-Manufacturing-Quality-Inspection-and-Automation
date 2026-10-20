@@ -44,6 +44,11 @@ class ApiError(Exception):
         self.message = message
 
 
+REVIEW_OUTCOMES = frozenset({"CONFIRMED_NORMAL", "CONFIRMED_DEFECT", "INCONCLUSIVE"})
+DEFECT_TYPES = frozenset({"scratch", "dent", "crack", "contamination", "misalignment", "other"})
+MAX_REVIEW_NOTE_LENGTH = 2000
+
+
 def _record_payload(record: InspectionRecord) -> dict[str, Any]:
     payload = asdict(record)
     payload["reason_codes"] = list(record.reason_codes)
@@ -125,13 +130,17 @@ class InspectionApi:
                 return 200, {"items": [_record_payload(item) for item in self.store.list(limit)]}
             if method == "POST" and route == "/api/v1/inspections":
                 return self._create(body, headers)
-            if method == "GET" and route.startswith("/api/v1/inspections/"):
+            if method in {"GET", "POST"} and route.startswith("/api/v1/inspections/"):
                 segments = route.split("/")
                 if len(segments) == 5 and segments[-1] == "events":
                     raise ApiError(404, "NOT_FOUND", "inspection was not found")
                 inspection_id = segments[4]
-                if len(segments) == 6 and segments[5] == "events":
+                if method == "GET" and len(segments) == 6 and segments[5] == "reviews":
+                    return 200, {"items": [asdict(review) for review in self.store.reviews(inspection_id)]}
+                if method == "GET" and len(segments) == 6 and segments[5] == "events":
                     return 200, {"items": self.store.events(inspection_id)}
+                if method == "POST" and len(segments) == 6 and segments[5] == "reviews":
+                    return self._create_review(inspection_id, body)
                 return 200, _record_payload(self.store.get(inspection_id))
             raise ApiError(404, "NOT_FOUND", "route was not found")
         except ApiError:
@@ -151,6 +160,30 @@ class InspectionApi:
         if not isinstance(metadata, Mapping):
             return 200, {"available": False, "reason": "METADATA_INVALID"}
         return 200, {**_public_metadata(metadata), "available": True}
+
+    def _create_review(self, inspection_id: str, body: bytes) -> tuple[int, dict[str, Any]]:
+        if len(body) > 16 * 1024:
+            raise ApiError(413, "REQUEST_TOO_LARGE", "review request exceeds 16 KiB")
+        try:
+            payload = json.loads(body.decode("utf-8")) if body else {}
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ApiError(400, "INVALID_JSON", "review request must be JSON") from exc
+        if not isinstance(payload, dict):
+            raise ApiError(400, "INVALID_JSON", "review request must be a JSON object")
+        outcome = payload.get("outcome")
+        if outcome not in REVIEW_OUTCOMES:
+            raise ApiError(400, "INVALID_REVIEW_OUTCOME", "outcome must be CONFIRMED_NORMAL, CONFIRMED_DEFECT, or INCONCLUSIVE")
+        defect_type = payload.get("defect_type")
+        if defect_type is not None and (outcome != "CONFIRMED_DEFECT" or defect_type not in DEFECT_TYPES):
+            raise ApiError(400, "INVALID_DEFECT_TYPE", "defect_type is only supported for CONFIRMED_DEFECT and must be a supported value")
+        note = payload.get("note")
+        if note is not None and (not isinstance(note, str) or len(note) > MAX_REVIEW_NOTE_LENGTH):
+            raise ApiError(400, "INVALID_REVIEW_NOTE", f"note must be text of at most {MAX_REVIEW_NOTE_LENGTH} characters")
+        try:
+            review = self.store.add_review(inspection_id, outcome=outcome, defect_type=defect_type, note=note.strip() if isinstance(note, str) and note.strip() else None)
+        except KeyError as exc:
+            raise ApiError(404, "INSPECTION_NOT_FOUND", str(exc.args[0])) from exc
+        return 201, asdict(review)
 
     def _camera_state(self) -> str:
         with self._camera_lock:

@@ -27,6 +27,7 @@ Legend: `[x]` verified complete, `[~]` implemented or partially evidenced, `[ ]`
 - [x] Enforce idempotency keys and request-hash conflict detection.
 - [x] Verify persistence read-back and idempotency behavior with tests.
 - [x] Keep client-provided scores and outcomes untrusted.
+- [x] Store additive human review records separately from AI decisions, with audit events and provenance where available.
 
 ## 3. Local API and operational path
 
@@ -95,6 +96,7 @@ Legend: `[x]` verified complete, `[~]` implemented or partially evidenced, `[ ]`
 - [ ] Keep visual outcome separate from physical action state.
 - [x] Add accessible operator states and clear API error handling.
 - [~] Add frontend smoke coverage against the real API contract; full browser automation remains open.
+- [x] Add dashboard human review submission, validation, and chronological review history.
 
 ## 8. ESP32, machine actions, and safety
 

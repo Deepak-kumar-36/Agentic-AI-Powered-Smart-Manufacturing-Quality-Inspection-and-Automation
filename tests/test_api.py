@@ -293,6 +293,28 @@ class InspectionApiTests(unittest.TestCase):
         finally:
             api.store.close()
 
+    def test_review_routes_validate_and_preserve_ai_record(self) -> None:
+        record = self.api.handle("POST", "/api/v1/inspections", json.dumps({"category": "bottle"}).encode(), {"Idempotency-Key": "review-api"})[1]
+        review_status, review = self.api.handle("POST", f"/api/v1/inspections/{record['inspection_id']}/reviews", json.dumps({"outcome": "CONFIRMED_DEFECT", "defect_type": "scratch", "note": "Visible mark"}).encode())
+        self.assertEqual(review_status, 201)
+        self.assertEqual(review["model_version"], None)
+        self.assertEqual(review["defect_type"], "scratch")
+        history = self.api.handle("GET", f"/api/v1/inspections/{record['inspection_id']}/reviews")[1]["items"]
+        self.assertEqual(len(history), 1)
+        original = self.api.handle("GET", f"/api/v1/inspections/{record['inspection_id']}")[1]
+        self.assertEqual(original["outcome"], "UNVERIFIED")
+        with self.assertRaisesRegex(Exception, "defect_type is only supported"):
+            self.api.handle("POST", f"/api/v1/inspections/{record['inspection_id']}/reviews", json.dumps({"outcome": "CONFIRMED_NORMAL", "defect_type": "scratch"}).encode())
+        with self.assertRaisesRegex(Exception, "note must be text"):
+            self.api.handle("POST", f"/api/v1/inspections/{record['inspection_id']}/reviews", json.dumps({"outcome": "INCONCLUSIVE", "note": "x" * 2001}).encode())
+
+    def test_review_rejects_unknown_inspection_and_invalid_outcome(self) -> None:
+        with self.assertRaises(Exception):
+            self.api.handle("POST", "/api/v1/inspections/ins_missing/reviews", b'{"outcome":"INCONCLUSIVE"}')
+        record = self.api.handle("POST", "/api/v1/inspections", json.dumps({"category": "bottle"}).encode(), {"Idempotency-Key": "review-invalid"})[1]
+        with self.assertRaisesRegex(Exception, "outcome must be"):
+            self.api.handle("POST", f"/api/v1/inspections/{record['inspection_id']}/reviews", b'{"outcome":"PASS"}')
+
 
 if __name__ == "__main__":
     unittest.main()

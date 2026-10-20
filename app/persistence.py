@@ -35,6 +35,18 @@ class InspectionRecord:
     evidence: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class InspectionReview:
+    review_id: str
+    inspection_id: str
+    outcome: str
+    defect_type: str | None
+    note: str | None
+    created_at: str
+    model_version: str | None
+    input_image_hash: str | None
+
+
 class InspectionStore:
     """SQLite store with explicit transactions and immutable event rows."""
 
@@ -77,6 +89,17 @@ class InspectionStore:
                     created_at TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_events_inspection ON inspection_events(inspection_id, event_id);
+                CREATE TABLE IF NOT EXISTS inspection_reviews (
+                    review_id TEXT PRIMARY KEY,
+                    inspection_id TEXT NOT NULL REFERENCES inspections(inspection_id),
+                    outcome TEXT NOT NULL,
+                    defect_type TEXT,
+                    note TEXT,
+                    created_at TEXT NOT NULL,
+                    model_version TEXT,
+                    input_image_hash TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_reviews_inspection ON inspection_reviews(inspection_id, created_at, review_id);
                 """
             )
 
@@ -154,6 +177,37 @@ class InspectionStore:
                 (inspection_id,),
             ).fetchall()
             return [{"event_type": row["event_type"], "payload": json.loads(row["payload"]), "created_at": row["created_at"]} for row in rows]
+
+    def add_review(self, inspection_id: str, *, outcome: str, defect_type: str | None = None, note: str | None = None) -> InspectionReview:
+        with self._lock:
+            record = self.get(inspection_id)
+            provenance = self.connection.execute(
+                "SELECT payload FROM inspection_events WHERE inspection_id = ? AND event_type = 'inspection.created' ORDER BY event_id LIMIT 1",
+                (inspection_id,),
+            ).fetchone()
+            payload = json.loads(provenance["payload"]) if provenance else {}
+            image_hash = payload.get("image_sha256") if isinstance(payload.get("image_sha256"), str) else None
+            if image_hash is None:
+                encoded = record.evidence.get("input_image_data")
+                if isinstance(encoded, str) and encoded.startswith("data:"):
+                    image_hash = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+            review = InspectionReview(uuid4().hex, inspection_id, outcome, defect_type, note, _now(), record.model_version, image_hash)
+            with self.connection:
+                self.connection.execute(
+                    "INSERT INTO inspection_reviews (review_id, inspection_id, outcome, defect_type, note, created_at, model_version, input_image_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (review.review_id, review.inspection_id, review.outcome, review.defect_type, review.note, review.created_at, review.model_version, review.input_image_hash),
+                )
+                self._event(inspection_id, "inspection.review_recorded", {"review_id": review.review_id, "outcome": outcome, "defect_type": defect_type})
+            return review
+
+    def reviews(self, inspection_id: str) -> list[InspectionReview]:
+        with self._lock:
+            self.get(inspection_id)
+            rows = self.connection.execute(
+                "SELECT review_id, inspection_id, outcome, defect_type, note, created_at, model_version, input_image_hash FROM inspection_reviews WHERE inspection_id = ? ORDER BY created_at, review_id",
+                (inspection_id,),
+            ).fetchall()
+            return [InspectionReview(**dict(row)) for row in rows]
 
     def _event(self, inspection_id: str, event_type: str, payload: dict[str, Any]) -> None:
         self.connection.execute(
