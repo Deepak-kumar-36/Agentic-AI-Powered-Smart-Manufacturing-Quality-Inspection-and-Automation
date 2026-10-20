@@ -19,6 +19,10 @@ The workspace initially contained engineering specifications but no application 
 
 ## Setup
 
+For a complete local start-to-finish walkthrough, including separate backend
+and frontend terminals, API examples, evidence export, ZIP validation, staging,
+Docker, and troubleshooting, see [`docs/LOCAL_DEVELOPMENT.md`](docs/LOCAL_DEVELOPMENT.md).
+
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
