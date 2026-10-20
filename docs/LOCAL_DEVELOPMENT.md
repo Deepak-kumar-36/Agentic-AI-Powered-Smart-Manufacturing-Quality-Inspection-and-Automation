@@ -36,11 +36,12 @@ needed for the default development flow or test suite.
 ## 2. Enter the repository
 
 ```bash
-cd "/home/deepak/Code/AI-Powered Smart Manufacture Quality Inspection"
+cd /path/to/your/checkout
 ```
 
-For another checkout, replace the path with that checkout's absolute or relative
-path. Do not hard-code this machine's path into application configuration.
+Replace `/path/to/your/checkout` with the path of your own checkout, or run the
+command from the repository root. Do not hard-code a developer machine's path
+into application configuration or committed documentation.
 
 Check the current branch and working tree before making changes:
 
