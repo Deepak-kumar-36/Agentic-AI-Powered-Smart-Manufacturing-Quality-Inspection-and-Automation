@@ -3,7 +3,7 @@ import unittest
 
 import numpy as np
 
-from app.camera import CameraError, CameraFrame, FramePolicy, FreshFrameSelector, MjpegCameraSource, extract_jpeg, validate_frame
+from app.camera import CameraError, CameraFrame, FramePolicy, FreshFrameSelector, MjpegCameraSource, extract_jpeg, validate_camera_url, validate_frame
 
 
 def frame(sequence: int = 1, *, captured: datetime | None = None, shape=(64, 64, 3)) -> CameraFrame:
@@ -21,6 +21,12 @@ class CameraTests(unittest.TestCase):
     def test_phone_camera_requires_absolute_http_url(self) -> None:
         with self.assertRaises(ValueError):
             MjpegCameraSource("phone-camera/video")
+
+    def test_phone_camera_rejects_credentials_and_public_hosts(self) -> None:
+        with self.assertRaises(ValueError):
+            validate_camera_url("http://user:password@127.0.0.1:8080/video")
+        with self.assertRaises(ValueError):
+            validate_camera_url("https://example.com/video")
 
     def test_valid_frame_is_accepted(self) -> None:
         accepted = FreshFrameSelector().accept(frame(), now=datetime.now(timezone.utc))

@@ -118,7 +118,8 @@ For each row, set a status using the vocabulary above and add evidence reference
 - [ ] Debug endpoints and development-only behavior are disabled or controlled for the selected gate.
 
 ### 6.2 Camera and input integrity
-- [ ] Phone-camera connection method and exact configuration are recorded.
+- [x] Phone-camera connection method and exact configuration are recorded for the
+  supervised dashboard flow; physical-device verification remains pending.
 - [ ] Capture freshness and frame-to-item identity are tested.
 - [ ] Resolution, framing, focus, lighting, and permitted variation are documented.
 - [ ] Corrupt, unsupported, stale, or out-of-range inputs are rejected or yield `UNVERIFIED`.

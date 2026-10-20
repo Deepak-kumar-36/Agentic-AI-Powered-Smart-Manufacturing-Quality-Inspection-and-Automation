@@ -6,18 +6,53 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from io import BytesIO
 import os
+import ipaddress
 import select
+import socket
 import subprocess
 import time
 from typing import Any, Protocol
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
+from urllib.request import Request, build_opener, HTTPRedirectHandler
 
 import numpy as np
 
 
 class CameraError(RuntimeError):
     """Raised for invalid or unavailable camera frames."""
+
+
+def validate_camera_url(value: str) -> str:
+    """Accept only credential-free HTTP URLs targeting a local/private host."""
+    parsed = urlparse(value.strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+        raise ValueError("phone camera URL must be a credential-free local HTTP(S) URL")
+    if parsed.fragment or parsed.query and any(key.lower() in parsed.query.lower() for key in ("token", "key", "secret", "password")):
+        raise ValueError("phone camera URL must not contain fragments or credential-like query parameters")
+    host = parsed.hostname.rstrip(".").lower()
+    if host not in {"localhost", "127.0.0.1", "::1"}:
+        try:
+            addresses = {item[4][0] for item in socket.getaddrinfo(host, parsed.port or 80, type=socket.SOCK_STREAM)}
+        except OSError as exc:
+            raise ValueError("phone camera host could not be resolved") from exc
+        if not addresses or not all(ipaddress.ip_address(address).is_private for address in addresses):
+            raise ValueError("phone camera host must resolve to a private/local address")
+    return value.strip()
+
+
+def redact_camera_url(value: str) -> str:
+    parsed = urlparse(value)
+    host = parsed.hostname or ""
+    port = f":{parsed.port}" if parsed.port else ""
+    return f"{parsed.scheme}://{host}{port}{parsed.path or '/'}"
+
+
+class _NoRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_NO_REDIRECT_OPENER = build_opener(_NoRedirectHandler)
 
 
 @dataclass(frozen=True)
@@ -264,15 +299,15 @@ class MjpegCameraSource:
     never be committed because it can contain a private address or token.
     """
 
-    def __init__(self, url: str, *, camera_id: str = "phone-mjpeg", chunk_size: int = 65536) -> None:
-        parsed = urlparse(url)
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            raise ValueError("phone camera URL must be an absolute HTTP(S) URL")
+    def __init__(self, url: str, *, camera_id: str = "phone-mjpeg", chunk_size: int = 65536, max_buffer_bytes: int = 12 * 1024 * 1024) -> None:
+        self.url = validate_camera_url(url)
         if chunk_size < 1024:
             raise ValueError("chunk_size is too small")
-        self.url = url
+        if max_buffer_bytes < chunk_size:
+            raise ValueError("max_buffer_bytes is too small")
         self.camera_id = camera_id
         self.chunk_size = chunk_size
+        self.max_buffer_bytes = max_buffer_bytes
         self._response: Any | None = None
         self._buffer = bytearray()
         self._sequence = 0
@@ -284,7 +319,7 @@ class MjpegCameraSource:
             return
         request = Request(self.url, headers={"User-Agent": "manufacturing-inspection/0.1"})
         try:
-            self._response = urlopen(request, timeout=5)
+            self._response = _NO_REDIRECT_OPENER.open(request, timeout=5)
         except OSError as exc:
             self._last_error = str(exc)
             raise CameraError(f"unable to open phone camera stream: {exc}") from exc
@@ -310,6 +345,9 @@ class MjpegCameraSource:
                     self._last_error = "phone camera stream ended"
                     return None
                 self._buffer.extend(chunk)
+                if len(self._buffer) > self.max_buffer_bytes:
+                    self._last_error = "phone camera stream exceeded the frame buffer limit"
+                    return None
         except (OSError, TimeoutError) as exc:
             self._last_error = f"phone camera read failed: {exc}"
             return None
@@ -338,6 +376,7 @@ class MjpegCameraSource:
             "camera_id": self.camera_id,
             "transport": "http-mjpeg",
             "url_configured": bool(self.url),
+            "url": redact_camera_url(self.url),
             "open": self._response is not None,
             "frames_read": self._frames_read,
             "last_error": self._last_error,

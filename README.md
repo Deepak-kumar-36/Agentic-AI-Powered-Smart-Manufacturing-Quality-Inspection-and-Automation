@@ -336,8 +336,15 @@ python -m app.phone_camera_smoke \
 Replace `PHONE_IP` with the address shown by the phone app. Do not commit the
 address, stream URL, credentials, or tokens. The command writes a local PPM
 frame, validates freshness and sequence identity, and reports the stream health.
-The phone adapter is transport-ready, but it is not yet wired to a live model
-decision loop or physical actuation.
+The phone adapter is transport-ready and the consolidated dashboard exposes the
+same supervised one-shot flow through `/api/v1/camera/configure`,
+`/api/v1/camera/status`, and `/api/v1/camera/capture-inspection`. Camera setup
+remains in memory; URLs must resolve to a local/private host and may not contain
+credentials or credential-like query parameters. Capture failures produce a
+persisted `UNVERIFIED` record when capture was requested, never a client-chosen
+decision. The returned record includes the server decision, score, model version,
+event timeline, and available heatmap/input evidence. No continuous capture or
+actuation is implemented.
 
 ### Phone-camera shadow inference
 

@@ -17,11 +17,14 @@ from pathlib import Path
 from typing import Any, Mapping, Protocol
 from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
+from datetime import datetime, timezone
+from threading import RLock
 
 from PIL import Image
 import numpy as np
 
 from .persistence import InspectionRecord, InspectionStore
+from .camera import CameraError, FramePolicy, FreshFrameSelector, MjpegCameraSource, redact_camera_url, validate_camera_url
 from .policy import DecisionPolicy, InspectionInput, ModelEvidence, reason_values
 
 
@@ -76,12 +79,18 @@ class InspectionApi:
         policies: Mapping[str, DecisionPolicy] | None = None,
         image_root: str | Path | None = None,
         metadata_provider: MetadataProvider | None = None,
+        camera_source_factory: Any | None = None,
     ) -> None:
         self.store = store or InspectionStore()
         self.model = model
         self.policies = dict(policies or {})
         self.image_root = Path(image_root).resolve() if image_root is not None else None
         self.metadata_provider = metadata_provider
+        self._camera_lock = RLock()
+        self._camera_source_factory = camera_source_factory or MjpegCameraSource
+        self._camera_source: Any | None = None
+        self._camera_url: str | None = None
+        self._camera_selector = FreshFrameSelector(FramePolicy(max_age_ms=1000))
 
     def reload_model(self, category: str | None = None) -> list[str]:
         """Invalidate the injected model cache after reviewed artifact replacement."""
@@ -98,9 +107,15 @@ class InspectionApi:
             if method == "GET" and route == "/health/live":
                 return 200, {"status": "ok", "service": "inspection-api"}
             if method == "GET" and route == "/health/ready":
-                return 200, {"ready": True, "components": {"database": "ready", "model": "ready" if self.model else "not_ready", "camera": "not_configured", "controller": "disabled"}}
+                return 200, {"ready": True, "components": {"database": "ready", "model": "ready" if self.model else "not_ready", "camera": self._camera_state(), "controller": "disabled"}}
             if method == "GET" and route == "/api/v1/system/status":
-                return 200, {"mode": "software_only", "actuation_enabled": False, "model": "ready" if self.model else "not_ready", "camera": "not_configured", "database": "ready"}
+                return 200, {"mode": "software_only", "actuation_enabled": False, "model": "ready" if self.model else "not_ready", "camera": self._camera_state(), "database": "ready"}
+            if method == "GET" and route == "/api/v1/camera/status":
+                return 200, self._camera_status()
+            if method == "POST" and route == "/api/v1/camera/configure":
+                return self._configure_camera(body)
+            if method == "POST" and route == "/api/v1/camera/capture-inspection":
+                return self._capture_inspection(body, headers)
             if method == "GET" and route == "/api/v1/system/metadata":
                 return self._metadata()
             if method == "POST" and route == "/api/v1/images":
@@ -136,6 +151,76 @@ class InspectionApi:
         if not isinstance(metadata, Mapping):
             return 200, {"available": False, "reason": "METADATA_INVALID"}
         return 200, {**_public_metadata(metadata), "available": True}
+
+    def _camera_state(self) -> str:
+        with self._camera_lock:
+            return "ready" if self._camera_source is not None else "not_configured"
+
+    def _camera_status(self) -> dict[str, Any]:
+        with self._camera_lock:
+            if self._camera_source is None:
+                return {"configured": False, "status": "not_configured", "url": None, "health": None}
+            health = self._camera_source.health()
+            return {"configured": True, "status": "ready" if health.get("open") and not health.get("last_error") else "error", "url": redact_camera_url(self._camera_url or ""), "health": health}
+
+    def _configure_camera(self, body: bytes) -> tuple[int, dict[str, Any]]:
+        if len(body) > 8 * 1024:
+            raise ApiError(413, "REQUEST_TOO_LARGE", "camera configuration exceeds 8 KiB")
+        try:
+            payload = json.loads(body.decode("utf-8"))
+            url = validate_camera_url(payload.get("url", ""))
+        except (UnicodeDecodeError, json.JSONDecodeError, AttributeError, TypeError, ValueError) as exc:
+            raise ApiError(400, "INVALID_CAMERA_URL", str(exc)) from exc
+        try:
+            source = self._camera_source_factory(url)
+            source.open()
+        except Exception as exc:
+            if "source" in locals():
+                source.close()
+            raise ApiError(502, "CAMERA_UNAVAILABLE", "phone camera stream could not be opened") from exc
+        with self._camera_lock:
+            if self._camera_source is not None:
+                self._camera_source.close()
+            self._camera_source, self._camera_url = source, url
+            self._camera_selector.reset()
+        return 200, self._camera_status()
+
+    def _capture_inspection(self, body: bytes, headers: dict[str, str]) -> tuple[int, dict[str, Any]]:
+        if len(body) > 8 * 1024:
+            raise ApiError(413, "REQUEST_TOO_LARGE", "capture request exceeds 8 KiB")
+        try:
+            payload = json.loads(body.decode("utf-8")) if body else {}
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ApiError(400, "INVALID_JSON", "capture request must be JSON") from exc
+        if not isinstance(payload, dict) or not isinstance(payload.get("category"), str) or not payload["category"].strip():
+            raise ApiError(400, "CATEGORY_REQUIRED", "category is required")
+        idempotency_key = headers.get("idempotency-key")
+        if not idempotency_key:
+            raise ApiError(400, "IDEMPOTENCY_KEY_REQUIRED", "Idempotency-Key header is required")
+        request = {"category": payload["category"].strip(), "source": "phone-camera"}
+        record = self.store.create(idempotency_key, request)
+        if record.outcome is not None:
+            return 200, _record_payload(record)
+        with self._camera_lock:
+            source = self._camera_source
+            if source is None:
+                record = self.store.record_decision(record.inspection_id, outcome="UNVERIFIED", reason_codes=["CAMERA_NOT_CONFIGURED"], policy_version="policy-unverified", model_version=None, score=None)
+                return 200, _record_payload(record)
+            try:
+                frame = source.read(5000)
+                if frame is None:
+                    raise CameraError("camera frame unavailable")
+                accepted = self._camera_selector.accept(frame, now=datetime.now(timezone.utc))
+                if self.image_root is None:
+                    raise CameraError("image root is not configured")
+                image_path = self.image_root / f"phone-camera-{uuid4().hex}.png"
+                image_buffer = BytesIO()
+                Image.fromarray(accepted.frame, mode="RGB").save(image_buffer, format="PNG")
+                image_path.write_bytes(image_buffer.getvalue())
+                record = self._decide(record.inspection_id, {"category": request["category"], "image_path": image_path.name}, evidence_extra={"input_image_data": "data:image/png;base64," + base64.b64encode(image_buffer.getvalue()).decode("ascii")})
+            except (CameraError, OSError, ValueError):
+                record = self.store.record_decision(record.inspection_id, outcome="UNVERIFIED", reason_codes=["CAMERA_FRAME_INVALID"], policy_version="policy-unverified", model_version=None, score=None)
+        return 200, _record_payload(record)
 
     def _create(self, body: bytes, headers: dict[str, str]) -> tuple[int, dict[str, Any]]:
         if len(body) > 64 * 1024:
@@ -181,7 +266,7 @@ class InspectionApi:
         target.write_bytes(raw)
         return 201, {"image_path": stored_name, "bytes": len(raw)}
 
-    def _decide(self, inspection_id: str, payload: dict[str, Any]) -> InspectionRecord:
+    def _decide(self, inspection_id: str, payload: dict[str, Any], *, evidence_extra: dict[str, Any] | None = None) -> InspectionRecord:
         category = payload["category"].strip()
         if self.model is None:
             return self.store.record_decision(
@@ -211,7 +296,7 @@ class InspectionApi:
             InspectionInput(valid=True),
             ModelEvidence(model_version=evidence.model_version, score=evidence.score),
         )
-        evidence_payload: dict[str, Any] = {}
+        evidence_payload: dict[str, Any] = dict(evidence_extra or {})
         heatmap = getattr(evidence, "heatmap", None)
         if heatmap is not None and self.image_root is not None:
             values = np.asarray(heatmap, dtype=np.float32)

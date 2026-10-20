@@ -3,6 +3,8 @@ import base64
 from pathlib import Path
 import tempfile
 import unittest
+from datetime import datetime, timezone
+import numpy as np
 
 from app.api import InspectionApi
 from app.persistence import InspectionStore
@@ -26,6 +28,27 @@ class FakeModel:
 
     def reload(self, _category: str | None = None) -> set[str]:
         return set()
+
+
+class FakeCamera:
+    def __init__(self, frame=None, error=None) -> None:
+        self.frame = frame
+        self.error = error
+        self.opened = False
+
+    def open(self) -> None:
+        if self.error:
+            raise OSError(self.error)
+        self.opened = True
+
+    def read(self, _timeout_ms: int):
+        return self.frame
+
+    def health(self):
+        return {"camera_id": "fake", "open": self.opened, "last_error": None}
+
+    def close(self) -> None:
+        self.opened = False
 
 
 class InspectionApiTests(unittest.TestCase):
@@ -235,6 +258,38 @@ class InspectionApiTests(unittest.TestCase):
         api = InspectionApi(InspectionStore(), model=FakeModel(0.1))
         try:
             self.assertEqual(api.reload_model("bottle"), [])
+        finally:
+            api.store.close()
+
+    def test_phone_camera_configure_capture_persists_decision_and_input_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            now = datetime.now(timezone.utc)
+            frame = type("Frame", (), {"frame": np.zeros((64, 64, 3), dtype=np.uint8), "captured_at_utc": now.isoformat(), "camera_id": "fake", "sequence_no": 1, "width": 64, "height": 64})()
+            source = FakeCamera(frame)
+            api = InspectionApi(InspectionStore(), model=FakeModel(0.1), policies={"bottle": DecisionPolicy("policy-1", frozenset({"efficientad-s-native-v1"}), 0.2, 0.8)}, image_root=directory, camera_source_factory=lambda _url: source)
+            try:
+                status, configured = api.handle("POST", "/api/v1/camera/configure", json.dumps({"url": "http://127.0.0.1:8080/video"}).encode())
+                self.assertEqual(status, 200)
+                self.assertEqual(configured["url"], "http://127.0.0.1:8080/video")
+                status, record = api.handle("POST", "/api/v1/camera/capture-inspection", json.dumps({"category": "bottle"}).encode(), {"Idempotency-Key": "camera-one"})
+                self.assertEqual(status, 200)
+                self.assertEqual(record["outcome"], "PASS")
+                self.assertTrue(record["evidence"]["input_image_data"].startswith("data:image/png;base64,"))
+                events = api.handle("GET", f"/api/v1/inspections/{record['inspection_id']}/events")[1]["items"]
+                self.assertEqual([event["event_type"] for event in events], ["inspection.created", "inspection.decision_recorded"])
+                duplicate = api.handle("POST", "/api/v1/camera/capture-inspection", json.dumps({"category": "bottle"}).encode(), {"Idempotency-Key": "camera-one"})[1]
+                self.assertEqual(duplicate["inspection_id"], record["inspection_id"])
+            finally:
+                api.store.close()
+
+    def test_phone_camera_failure_is_unverified_and_does_not_leak_url(self) -> None:
+        api = InspectionApi(InspectionStore(), camera_source_factory=lambda _url: FakeCamera(error="offline"))
+        try:
+            with self.assertRaisesRegex(Exception, "credential-like"):
+                api.handle("POST", "/api/v1/camera/configure", json.dumps({"url": "http://127.0.0.1:8080/video?token=secret"}).encode())
+            with self.assertRaisesRegex(Exception, "could not be opened"):
+                api.handle("POST", "/api/v1/camera/configure", json.dumps({"url": "http://127.0.0.1:8080/video"}).encode())
+            self.assertNotIn("secret", json.dumps(api.handle("GET", "/api/v1/camera/status")[1]))
         finally:
             api.store.close()
 

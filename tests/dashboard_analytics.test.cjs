@@ -58,10 +58,10 @@ test('dashboard is a single scrollable workspace with bounded history controls a
   for (const route of ['new-inspection', 'history', 'model', 'dataset', 'health', 'settings']) {
     assert.doesNotMatch(html, new RegExp(`data-route="${route}"`));
   }
-  for (const id of ['dashboard-view', 'model-view', 'dataset', 'health-view', 'settings', 'historySearch', 'historyCategory', 'historyOutcome']) {
+  for (const id of ['dashboard-view', 'phone-camera', 'cameraUrl', 'cameraConfigureButton', 'cameraCaptureButton', 'cameraResult', 'dataset', 'historySearch', 'historyCategory', 'historyOutcome']) {
     assert.match(html, new RegExp(`id="${id}"`));
   }
-  for (const path of ['/health/ready', '/api/v1/system/status', '/api/v1/system/metadata', '/api/v1/inspections?limit=50', '/api/v1/images']) {
+  for (const path of ['/health/ready', '/api/v1/system/status', '/api/v1/system/metadata', '/api/v1/inspections?limit=50', '/api/v1/images', '/api/v1/camera/status', '/api/v1/camera/configure', '/api/v1/camera/capture-inspection']) {
     assert.match(html, new RegExp(path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
   assert.match(html, /does not fabricate dataset counts/);
@@ -74,6 +74,8 @@ test('dashboard is a single scrollable workspace with bounded history controls a
   assert.match(html, /renderMetadataState\(null\)/);
   assert.match(html, /releaseMetadata\.available/);
   assert.match(html, /Idempotency-Key/);
+  assert.match(html, /Capturing and inspecting one fresh frame/);
+  assert.match(html, /Camera configuration stays in memory/);
   assert.doesNotMatch(html, /<button[^>]+(?:train|upload model|release|reload)/i);
   assert.doesNotMatch(html, /bottle, screw, capsule \(form options\)/i);
   assert.doesNotMatch(html, /example|mock|fake|demo records/i);
