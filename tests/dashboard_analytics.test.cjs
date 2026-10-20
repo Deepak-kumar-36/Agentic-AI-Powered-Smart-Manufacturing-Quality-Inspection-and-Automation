@@ -58,10 +58,10 @@ test('dashboard is a single scrollable workspace with bounded history controls a
   for (const route of ['new-inspection', 'history', 'model', 'dataset', 'health', 'settings']) {
     assert.doesNotMatch(html, new RegExp(`data-route="${route}"`));
   }
-  for (const id of ['dashboard-view', 'phone-camera', 'cameraUrl', 'cameraConfigureButton', 'cameraCaptureButton', 'cameraResult', 'reviewPanel', 'reviewOutcome', 'defectType', 'reviewNote', 'reviewSubmit', 'reviewHistory', 'dataset', 'historySearch', 'historyCategory', 'historyOutcome']) {
+  for (const id of ['dashboard-view', 'phone-camera', 'cameraUrl', 'cameraConfigureButton', 'cameraCaptureButton', 'cameraResult', 'reviewPanel', 'reviewOutcome', 'defectType', 'reviewNote', 'reviewSubmit', 'reviewHistory', 'reviewMetrics', 'reviewQueueBody', 'reviewAnalyticsOutcome', 'reviewAnalyticsState', 'reviewAnalyticsComparison', 'dataset', 'historySearch', 'historyCategory', 'historyOutcome']) {
     assert.match(html, new RegExp(`id="${id}"`));
   }
-  for (const path of ['/health/ready', '/api/v1/system/status', '/api/v1/system/metadata', '/api/v1/inspections?limit=50', '/api/v1/images', '/api/v1/camera/status', '/api/v1/camera/configure', '/api/v1/camera/capture-inspection', '/reviews']) {
+  for (const path of ['/health/ready', '/api/v1/system/status', '/api/v1/system/metadata', '/api/v1/inspections?limit=50', '/api/v1/images', '/api/v1/camera/status', '/api/v1/camera/configure', '/api/v1/camera/capture-inspection', '/api/v1/review-analytics', '/reviews']) {
     assert.match(html, new RegExp(path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
   assert.match(html, /does not fabricate dataset counts/);
@@ -79,6 +79,8 @@ test('dashboard is a single scrollable workspace with bounded history controls a
   assert.match(html, /Review is additive and never changes the AI decision/);
   assert.match(html, /Review saved. The AI decision was not changed/);
   assert.match(html, /escape\(review.note\)/);
+  assert.match(html, /Latest review per inspection/);
+  assert.match(html, /Agreement denominator excludes INCONCLUSIVE and UNVERIFIED/);
   assert.doesNotMatch(html, /<button[^>]+(?:train|upload model|release|reload)/i);
   assert.doesNotMatch(html, /bottle, screw, capsule \(form options\)/i);
   assert.doesNotMatch(html, /example|mock|fake|demo records/i);

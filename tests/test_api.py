@@ -315,6 +315,16 @@ class InspectionApiTests(unittest.TestCase):
         with self.assertRaisesRegex(Exception, "outcome must be"):
             self.api.handle("POST", f"/api/v1/inspections/{record['inspection_id']}/reviews", b'{"outcome":"PASS"}')
 
+    def test_review_analytics_route_supports_filters_and_rejects_invalid_pagination(self) -> None:
+        record = self.api.handle("POST", "/api/v1/inspections", json.dumps({"category": "bottle"}).encode(), {"Idempotency-Key": "analytics-api"})[1]
+        self.api.handle("POST", f"/api/v1/inspections/{record['inspection_id']}/reviews", b'{"outcome":"INCONCLUSIVE"}')
+        status, payload = self.api.handle("GET", "/api/v1/review-analytics?review_state=INCONCLUSIVE&page=1&page_size=1")
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["total_inspections"], 1)
+        self.assertEqual(payload["items"][0]["latest_review_outcome"], "INCONCLUSIVE")
+        with self.assertRaisesRegex(Exception, "page_size"):
+            self.api.handle("GET", "/api/v1/review-analytics?page_size=101")
+
 
 if __name__ == "__main__":
     unittest.main()

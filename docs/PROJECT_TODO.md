@@ -97,6 +97,7 @@ Legend: `[x]` verified complete, `[~]` implemented or partially evidenced, `[ ]`
 - [x] Add accessible operator states and clear API error handling.
 - [~] Add frontend smoke coverage against the real API contract; full browser automation remains open.
 - [x] Add dashboard human review submission, validation, and chronological review history.
+- [x] Add backend review coverage, latest-review agreement/disagreement, conflict, and attention analytics.
 
 ## 8. ESP32, machine actions, and safety
 

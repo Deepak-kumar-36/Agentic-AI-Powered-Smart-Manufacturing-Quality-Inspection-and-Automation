@@ -254,6 +254,17 @@ local prototype, so the UI does not claim verified reviewer identity. Reviews
 are preserved separately from dataset manifests and are not automatically
 approved as training data.
 
+The dashboard's Review Analytics section uses the latest review per inspection
+for operational status while preserving the full history. Coverage is reviewed
+inspections divided by total inspections. Agreement and disagreement are counted
+only for PASS/FAIL inspections with CONFIRMED_NORMAL/CONFIRMED_DEFECT latest
+reviews; INCONCLUSIVE and UNVERIFIED records are excluded from that denominator.
+Historical outcome conflicts are counted separately, and the attention queue
+includes unreviewed, inconclusive, conflicting, and UNVERIFIED inspections.
+These are descriptive AI–human agreement metrics, not production accuracy or
+proof of model quality; reviewer selection, label errors, dataset composition,
+and missing ground truth can affect them.
+
 Run the API and static dashboard in separate terminals:
 
 ```bash

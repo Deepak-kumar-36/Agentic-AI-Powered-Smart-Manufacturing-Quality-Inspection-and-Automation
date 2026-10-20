@@ -123,6 +123,8 @@ class InspectionApi:
                 return self._capture_inspection(body, headers)
             if method == "GET" and route == "/api/v1/system/metadata":
                 return self._metadata()
+            if method == "GET" and route == "/api/v1/review-analytics":
+                return self._review_analytics(parsed.query)
             if method == "POST" and route == "/api/v1/images":
                 return self._upload_image(body)
             if method == "GET" and route == "/api/v1/inspections":
@@ -160,6 +162,19 @@ class InspectionApi:
         if not isinstance(metadata, Mapping):
             return 200, {"available": False, "reason": "METADATA_INVALID"}
         return 200, {**_public_metadata(metadata), "available": True}
+
+    def _review_analytics(self, query: str) -> tuple[int, dict[str, Any]]:
+        values = parse_qs(query)
+        def one(name: str) -> str | None:
+            value = values.get(name, [None])[0]
+            return value if value not in {None, ""} else None
+        try:
+            page = int(one("page") or 1)
+            page_size = int(one("page_size") or 25)
+            analytics = self.store.review_analytics(page=page, page_size=page_size, review_outcome=one("review_outcome"), ai_outcome=one("ai_outcome"), comparison=one("comparison"), review_state=one("review_state"))
+        except ValueError as exc:
+            raise ApiError(400, "INVALID_REVIEW_ANALYTICS_QUERY", str(exc)) from exc
+        return 200, asdict(analytics)
 
     def _create_review(self, inspection_id: str, body: bytes) -> tuple[int, dict[str, Any]]:
         if len(body) > 16 * 1024:

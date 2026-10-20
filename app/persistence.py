@@ -47,6 +47,26 @@ class InspectionReview:
     input_image_hash: str | None
 
 
+@dataclass(frozen=True)
+class ReviewAnalytics:
+    total_inspections: int
+    reviewed_inspections: int
+    unreviewed_inspections: int
+    review_coverage_percent: float
+    review_records: int
+    outcome_distribution: dict[str, int]
+    agreement_count: int
+    disagreement_count: int
+    comparable_inspections: int
+    conflicting_review_inspections: int
+    unverified_inspections: int
+    awaiting_attention: int
+    items: list[dict[str, Any]]
+    page: int
+    page_size: int
+    total_items: int
+
+
 class InspectionStore:
     """SQLite store with explicit transactions and immutable event rows."""
 
@@ -204,10 +224,72 @@ class InspectionStore:
         with self._lock:
             self.get(inspection_id)
             rows = self.connection.execute(
-                "SELECT review_id, inspection_id, outcome, defect_type, note, created_at, model_version, input_image_hash FROM inspection_reviews WHERE inspection_id = ? ORDER BY created_at, review_id",
+                "SELECT review_id, inspection_id, outcome, defect_type, note, created_at, model_version, input_image_hash FROM inspection_reviews WHERE inspection_id = ? ORDER BY created_at, rowid",
                 (inspection_id,),
             ).fetchall()
             return [InspectionReview(**dict(row)) for row in rows]
+
+    def review_analytics(
+        self, *, page: int = 1, page_size: int = 25, review_outcome: str | None = None,
+        ai_outcome: str | None = None, comparison: str | None = None,
+        review_state: str | None = None,
+    ) -> ReviewAnalytics:
+        if page < 1 or not 1 <= page_size <= 100:
+            raise ValueError("page must be positive and page_size must be between 1 and 100")
+        allowed = {
+            "review_outcome": {"CONFIRMED_NORMAL", "CONFIRMED_DEFECT", "INCONCLUSIVE"},
+            "ai_outcome": {"PASS", "FAIL", "UNVERIFIED"},
+            "comparison": {"AGREEMENT", "DISAGREEMENT", "NOT_COMPARABLE"},
+            "review_state": {"REVIEWED", "UNREVIEWED", "INCONCLUSIVE", "CONFLICT", "ATTENTION"},
+        }
+        for name, value in (("review_outcome", review_outcome), ("ai_outcome", ai_outcome), ("comparison", comparison), ("review_state", review_state)):
+            if value is not None and value not in allowed[name]:
+                raise ValueError(f"invalid {name}")
+        with self._lock:
+            base = """
+                WITH ranked AS (
+                    SELECT r.*, ROW_NUMBER() OVER (PARTITION BY inspection_id ORDER BY created_at DESC, rowid DESC) AS rn
+                    FROM inspection_reviews r
+                ), stats AS (
+                    SELECT inspection_id, COUNT(*) AS review_count, COUNT(DISTINCT outcome) AS outcome_count
+                    FROM inspection_reviews GROUP BY inspection_id
+                ), states AS (
+                    SELECT i.inspection_id, i.outcome AS ai_outcome, i.model_version,
+                           l.outcome AS latest_review_outcome, l.defect_type, l.note,
+                           l.created_at AS review_created_at, COALESCE(s.review_count, 0) AS review_count,
+                           COALESCE(s.outcome_count, 0) AS outcome_count,
+                           CASE WHEN l.outcome = 'CONFIRMED_NORMAL' AND i.outcome = 'PASS' THEN 'AGREEMENT'
+                                WHEN l.outcome = 'CONFIRMED_DEFECT' AND i.outcome = 'FAIL' THEN 'AGREEMENT'
+                                WHEN l.outcome IN ('CONFIRMED_NORMAL', 'CONFIRMED_DEFECT') AND i.outcome IN ('PASS', 'FAIL') THEN 'DISAGREEMENT'
+                                ELSE 'NOT_COMPARABLE' END AS comparison
+                    FROM inspections i LEFT JOIN ranked l ON l.inspection_id = i.inspection_id AND l.rn = 1
+                    LEFT JOIN stats s ON s.inspection_id = i.inspection_id
+                )
+            """
+            rows = self.connection.execute(base + "SELECT * FROM states").fetchall()
+            total = len(rows)
+            reviewed = sum(row["review_count"] > 0 for row in rows)
+            distribution = {key: 0 for key in ("CONFIRMED_NORMAL", "CONFIRMED_DEFECT", "INCONCLUSIVE")}
+            for row in rows:
+                if row["latest_review_outcome"] in distribution:
+                    distribution[row["latest_review_outcome"]] += 1
+            agreement = sum(row["comparison"] == "AGREEMENT" for row in rows)
+            disagreement = sum(row["comparison"] == "DISAGREEMENT" for row in rows)
+            comparable = agreement + disagreement
+            conflicts = sum(row["outcome_count"] > 1 for row in rows)
+            unverified = sum(row["ai_outcome"] == "UNVERIFIED" for row in rows)
+            attention = sum(row["ai_outcome"] == "UNVERIFIED" or row["review_count"] == 0 or row["latest_review_outcome"] == "INCONCLUSIVE" or row["outcome_count"] > 1 for row in rows)
+            filtered = []
+            for row in rows:
+                if review_outcome and row["latest_review_outcome"] != review_outcome: continue
+                if ai_outcome and row["ai_outcome"] != ai_outcome: continue
+                if comparison and row["comparison"] != comparison: continue
+                state = "CONFLICT" if row["outcome_count"] > 1 else "UNREVIEWED" if row["review_count"] == 0 else "INCONCLUSIVE" if row["latest_review_outcome"] == "INCONCLUSIVE" else "REVIEWED"
+                if review_state == "ATTENTION" and not (row["ai_outcome"] == "UNVERIFIED" or state in {"UNREVIEWED", "INCONCLUSIVE", "CONFLICT"}): continue
+                if review_state and review_state != "ATTENTION" and state != review_state: continue
+                filtered.append({"inspection_id": row["inspection_id"], "ai_outcome": row["ai_outcome"], "latest_review_outcome": row["latest_review_outcome"], "defect_type": row["defect_type"], "note": row["note"], "review_created_at": row["review_created_at"], "review_count": row["review_count"], "conflicting_reviews": row["outcome_count"] > 1, "comparison": row["comparison"]})
+            start = (page - 1) * page_size
+            return ReviewAnalytics(total, reviewed, total - reviewed, round(reviewed / total * 100, 2) if total else 0.0, sum(row["review_count"] for row in rows), distribution, agreement, disagreement, comparable, conflicts, unverified, attention, filtered[start:start + page_size], page, page_size, len(filtered))
 
     def _event(self, inspection_id: str, event_type: str, payload: dict[str, Any]) -> None:
         self.connection.execute(

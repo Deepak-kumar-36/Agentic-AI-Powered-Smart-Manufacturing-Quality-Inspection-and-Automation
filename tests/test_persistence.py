@@ -54,6 +54,33 @@ class InspectionStoreTests(unittest.TestCase):
             self.assertTrue(any(event["event_type"] == "inspection.review_recorded" for event in reopened.events(record.inspection_id)))
             reopened.close()
 
+    def test_review_analytics_uses_latest_review_without_double_counting(self) -> None:
+        store = InspectionStore()
+        def inspection(key, outcome):
+            record = store.create(key, {"category": "bottle"})
+            store.record_decision(record.inspection_id, outcome=outcome, reason_codes=[], policy_version="p", model_version="m", score=0.1)
+            return record
+        normal = inspection("normal", "PASS")
+        defect = inspection("defect", "FAIL")
+        unverified = inspection("unverified", "UNVERIFIED")
+        store.add_review(normal.inspection_id, outcome="INCONCLUSIVE")
+        store.add_review(normal.inspection_id, outcome="CONFIRMED_NORMAL")
+        store.add_review(defect.inspection_id, outcome="CONFIRMED_DEFECT")
+        store.add_review(defect.inspection_id, outcome="CONFIRMED_NORMAL")
+        store.add_review(unverified.inspection_id, outcome="CONFIRMED_DEFECT")
+        result = store.review_analytics(review_state="ATTENTION")
+        self.assertEqual(result.total_inspections, 3)
+        self.assertEqual(result.reviewed_inspections, 3)
+        self.assertEqual(result.review_coverage_percent, 100.0)
+        self.assertEqual(result.outcome_distribution["INCONCLUSIVE"], 0)
+        self.assertEqual(result.agreement_count, 1)
+        self.assertEqual(result.disagreement_count, 1)
+        self.assertEqual(result.comparable_inspections, 2)
+        self.assertEqual(result.conflicting_review_inspections, 2)
+        self.assertEqual(result.unverified_inspections, 1)
+        self.assertEqual(result.total_items, 3)
+        store.close()
+
 
 if __name__ == "__main__":
     unittest.main()
