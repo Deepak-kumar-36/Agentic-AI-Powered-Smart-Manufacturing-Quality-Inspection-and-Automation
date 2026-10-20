@@ -288,6 +288,98 @@ package does not assign dataset splits, authorize training, alter inspections,
 or qualify a model release. Human review identity is not independently
 verified and the package is only candidate evidence.
 
+### Validate and stage an exported package (offline)
+
+Use the existing project Python environment; no GPU, hardware, network, or extra
+dependency is required. Treat every downloaded ZIP as untrusted, including our
+own exports. From the project root:
+
+```bash
+# Example input filename: replace it with the ZIP you downloaded.
+python -m app.dataset_intake validate reviewed-evidence.zip --report validation.json
+python -m json.tool validation.json
+
+# Only integrity-valid packages are staged; warnings remain in the report.
+python -m app.dataset_intake stage reviewed-evidence.zip \
+  --staging-root data/reviewed-staging --report staging-result.json
+```
+
+Report filenames must not already exist (exclusive creation, never overwritten).
+Validation prints sorted JSON as well as writing `--report` when requested. Exit
+codes are `0` for acceptable integrity, `1` for an invalid package, and `2` for
+argument or operational failures. A staging result wraps the validation report
+under `report` and returns only a generated destination basename under
+`destination`; invalid packages return `destination: null`.
+
+Status meanings:
+
+- `VALID`: all required integrity/schema checks passed without warnings.
+- `VALID_WITH_WARNINGS`: required checks passed, but metadata or scientific
+  readiness limitations remain. Reviewer/capture provenance cannot be independently
+  verified by this tool, so current packages normally receive this status.
+- `INVALID`: blocking archive, schema, label, digest, image, or security errors.
+  No candidate directory is published.
+
+The deterministic report binds to the validated ZIP bytes with `source_sha256`.
+It includes counts of archive members, manifest records, images, decoded/invalid
+images, verified/mismatched hashes, duplicates, label issues, metadata issues,
+exclusions, count inconsistencies, and security failures. Issues use redacted
+codes/messages and record indexes rather than echoing private content or local
+paths. Read `errors` first, then `warnings`. A passing integrity check is **not**
+training approval or proof of reliable evaluation data.
+
+The validator requires `manifest.jsonl`, `exclusions.csv`, and the exporter's
+`README.md` results summary. It checks every image under `images/`, ZIP CRCs,
+raw-byte SHA-256, strict JSONL/CSV, definitive human labels (`normal` corresponds
+to `CONFIRMED_NORMAL`, `defect` to `CONFIRMED_DEFECT`), controlled defect types,
+timezone-aware timestamps, original AI outcomes, duplicates, and README counts.
+It rejects missing/corrupt images, traversal/absolute/Windows paths, symlinks,
+special entries, case-colliding members, encrypted/unsupported compression,
+unexpected files, sensitive manifest metadata, and exceeded safety limits.
+
+Limits are configurable on **both** subcommands:
+
+| Flag | Default |
+| --- | --- |
+| `--max-compressed-bytes` | 67108864 (64 MiB) |
+| `--max-uncompressed-bytes` | 134217728 (128 MiB) |
+| `--max-images` | 500 |
+| `--max-image-bytes` | 16777216 (16 MiB) |
+| `--max-metadata-bytes` | 4194304 (4 MiB, aggregate metadata) |
+| `--max-compression-ratio` | 200 per member |
+| `--max-pixels` | 20000000 decoded pixels per image, across frames |
+
+Do not raise limits for an untrusted archive without assessing resource costs.
+Validation holds a bounded compressed snapshot and bounded decompressed contents
+in memory; it is intended for these small packages, not bulk dataset ingestion.
+
+Staging revalidates a private bounded snapshot, writes to a hidden temporary
+directory, rechecks copied hashes, then publishes `candidate-<generated UUID>`
+atomically without replacement. Failed writes/publication remove incomplete
+output. Linux `renameat2` and `/proc/self/fd` are required for this fail-closed
+publication path. Each candidate contains:
+
+```text
+images/000001.png          # generated names; formats may differ
+manifest.jsonl            # human labels/provenance preserved, image paths remapped
+staging-manifest.json     # source digest, path mapping, status, training_approved=false
+validation-report.json
+```
+
+The original ZIP and existing datasets/releases remain unchanged. Staging does
+not copy untrusted README/CSV text into the candidate or assign any splits.
+Use the dedicated ignored `data/reviewed-staging` location, separate from active
+datasets. Keep grouping identifiers intact for future split planning.
+
+Readiness warnings cover missing sample/session IDs, repeated groups that must
+stay together, missing provenance, low record counts (under 20), class imbalance
+(missing class or ratio over 5:1), and incomplete controlled defect-type coverage.
+These are screening heuristics, not adequacy guarantees. There are no splits to
+audit for cross-split leakage yet; missing grouping metadata means leakage
+**cannot be assessed**, not that it is absent. Current exports may lack those
+identifiers. No physical-sample IDs, sessions, defect labels, or ground truth are
+invented. Duplicate checks are within this package, not across other datasets.
+
 Run the API and static dashboard in separate terminals:
 
 ```bash
