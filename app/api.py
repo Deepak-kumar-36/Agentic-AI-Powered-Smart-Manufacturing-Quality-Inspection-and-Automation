@@ -24,6 +24,7 @@ from PIL import Image
 import numpy as np
 
 from .persistence import InspectionRecord, InspectionStore
+from .review_export import MAX_EXPORT_BYTES, MAX_EXPORT_RECORDS, build as build_review_export, collect as collect_review_export
 from .camera import CameraError, FramePolicy, FreshFrameSelector, MjpegCameraSource, redact_camera_url, validate_camera_url
 from .policy import DecisionPolicy, InspectionInput, ModelEvidence, reason_values
 
@@ -125,6 +126,8 @@ class InspectionApi:
                 return self._metadata()
             if method == "GET" and route == "/api/v1/review-analytics":
                 return self._review_analytics(parsed.query)
+            if method == "GET" and route == "/api/v1/review-export/preview":
+                return self._review_export_preview(parsed.query)
             if method == "POST" and route == "/api/v1/images":
                 return self._upload_image(body)
             if method == "GET" and route == "/api/v1/inspections":
@@ -175,6 +178,41 @@ class InspectionApi:
         except ValueError as exc:
             raise ApiError(400, "INVALID_REVIEW_ANALYTICS_QUERY", str(exc)) from exc
         return 200, asdict(analytics)
+
+    @staticmethod
+    def _export_query(query: str) -> tuple[int, int, dict[str, str]]:
+        values = parse_qs(query)
+        def one(name: str) -> str | None:
+            value = values.get(name, [None])[0]
+            return value if value not in {None, ""} else None
+        try:
+            limit = int(one("limit") or MAX_EXPORT_RECORDS)
+            byte_limit = int(one("byte_limit") or MAX_EXPORT_BYTES)
+        except ValueError as exc:
+            raise ApiError(400, "INVALID_EXPORT_QUERY", "limit and byte_limit must be integers") from exc
+        filters = {name: value for name in ("review_outcome", "ai_outcome") if (value := one(name))}
+        if filters.get("review_outcome") not in {None, *REVIEW_OUTCOMES}:
+            raise ApiError(400, "INVALID_EXPORT_QUERY", "invalid review_outcome")
+        if filters.get("ai_outcome") not in {None, "PASS", "FAIL", "UNVERIFIED"}:
+            raise ApiError(400, "INVALID_EXPORT_QUERY", "invalid ai_outcome")
+        return limit, byte_limit, filters
+
+    def _review_export_preview(self, query: str) -> tuple[int, dict[str, Any]]:
+        try:
+            limit, byte_limit, filters = self._export_query(query)
+            included, exclusions, _ = collect_review_export(self.store, image_root=self.image_root, limit=limit, byte_limit=byte_limit, filters=filters)
+        except ValueError as exc:
+            raise ApiError(400, "INVALID_EXPORT_QUERY", str(exc)) from exc
+        return 200, {"included": included, "exclusions": exclusions, "summary": {"included_count": len(included), "excluded_count": len(exclusions), "exclusion_counts": {reason: sum(item["reason"] == reason for item in exclusions) for reason in sorted({item["reason"] for item in exclusions})}, "record_limit": limit, "byte_limit": byte_limit}}
+
+    def export_download(self, path: str) -> tuple[bytes, str, dict[str, Any]]:
+        parsed = urlsplit(path)
+        try:
+            limit, byte_limit, filters = self._export_query(parsed.query)
+            result = build_review_export(self.store, image_root=self.image_root, limit=limit, byte_limit=byte_limit, filters=filters)
+        except ValueError as exc:
+            raise ApiError(400, "INVALID_EXPORT_QUERY", str(exc)) from exc
+        return result.archive, result.filename, result.summary
 
     def _create_review(self, inspection_id: str, body: bytes) -> tuple[int, dict[str, Any]]:
         if len(body) > 16 * 1024:
@@ -398,10 +436,23 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(encoded)
 
+    def _respond_download(self, archive: bytes, filename: str) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", "application/zip")
+        self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(archive)))
+        self.end_headers()
+        self.wfile.write(archive)
+
     def _dispatch(self, method: str) -> None:
         length = int(self.headers.get("Content-Length", "0"))
         body = self.rfile.read(length) if length else b""
         try:
+            if method == "GET" and urlsplit(self.path).path.rstrip("/") == "/api/v1/review-export/download":
+                archive, filename, _summary = self.api.export_download(self.path)
+                self._respond_download(archive, filename)
+                return
             status, payload = self.api.handle(method, self.path, body, dict(self.headers.items()))
         except ApiError as exc:
             status, payload = exc.status, {"error": {"code": exc.code, "message": exc.message}}

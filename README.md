@@ -265,6 +265,29 @@ These are descriptive AI–human agreement metrics, not production accuracy or
 proof of model quality; reviewer selection, label errors, dataset composition,
 and missing ground truth can affect them.
 
+### Human-reviewed evidence export
+
+The Review Analytics section can preview and download a bounded ZIP of candidate
+evidence through:
+
+- `GET /api/v1/review-export/preview`
+- `GET /api/v1/review-export/download`
+
+Exports are limited to 100 records and 64 MiB by default. Optional
+`review_outcome`, `ai_outcome`, `limit`, and `byte_limit` query parameters are
+validated server-side. The package contains `images/`, `manifest.jsonl`,
+`exclusions.csv`, and `README.md`. Images must be readable, hash-verifiable,
+definitively reviewed, and free of conflicting human outcomes. Exclusions are
+reported with machine-readable reasons; duplicate image hashes are excluded.
+
+The manifest label is derived only from the eligible human outcome
+(`normal`/`defect`). The original AI decision, score, model version, timestamps,
+and hash provenance remain available for later evaluation. Notes, reviewer
+identity, phone URLs, credentials, and internal paths are not exported. The
+package does not assign dataset splits, authorize training, alter inspections,
+or qualify a model release. Human review identity is not independently
+verified and the package is only candidate evidence.
+
 Run the API and static dashboard in separate terminals:
 
 ```bash

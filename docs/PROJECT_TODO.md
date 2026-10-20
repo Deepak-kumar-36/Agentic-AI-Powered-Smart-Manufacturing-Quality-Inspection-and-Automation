@@ -98,6 +98,7 @@ Legend: `[x]` verified complete, `[~]` implemented or partially evidenced, `[ ]`
 - [~] Add frontend smoke coverage against the real API contract; full browser automation remains open.
 - [x] Add dashboard human review submission, validation, and chronological review history.
 - [x] Add backend review coverage, latest-review agreement/disagreement, conflict, and attention analytics.
+- [x] Add bounded, redacted human-reviewed evidence export with eligibility preview, exclusions, provenance, and ZIP download.
 
 ## 8. ESP32, machine actions, and safety
 
