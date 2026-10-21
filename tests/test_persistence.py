@@ -1,11 +1,38 @@
 import tempfile
 import unittest
+import sqlite3
 from pathlib import Path
 
 from app.persistence import InspectionStore
 
 
 class InspectionStoreTests(unittest.TestCase):
+    def test_legacy_database_is_upgraded_with_evidence_column(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "legacy.db"
+            connection = sqlite3.connect(path)
+            connection.executescript("""
+                CREATE TABLE inspections (
+                    inspection_id TEXT PRIMARY KEY,
+                    idempotency_key TEXT NOT NULL UNIQUE,
+                    request_hash TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    outcome TEXT,
+                    reason_codes TEXT NOT NULL DEFAULT '[]',
+                    policy_version TEXT,
+                    model_version TEXT,
+                    score REAL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+            """)
+            connection.commit()
+            connection.close()
+            store = InspectionStore(path)
+            columns = {row[1] for row in store.connection.execute("PRAGMA table_info(inspections)")}
+            self.assertIn("evidence_json", columns)
+            store.close()
+
     def test_create_decide_read_back_after_reopen(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "inspection.db"

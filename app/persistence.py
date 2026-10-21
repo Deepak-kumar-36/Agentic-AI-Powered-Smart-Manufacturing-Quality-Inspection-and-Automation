@@ -122,6 +122,12 @@ class InspectionStore:
                 CREATE INDEX IF NOT EXISTS idx_reviews_inspection ON inspection_reviews(inspection_id, created_at, review_id);
                 """
             )
+            # Older local databases were created before evidence persistence was
+            # added. Upgrade them at startup so every read path has the same row
+            # contract as fresh databases.
+            columns = {row[1] for row in self.connection.execute("PRAGMA table_info(inspections)")}
+            if "evidence_json" not in columns:
+                self.connection.execute("ALTER TABLE inspections ADD COLUMN evidence_json TEXT NOT NULL DEFAULT '{}'")
 
     def create(self, idempotency_key: str, payload: dict[str, Any]) -> InspectionRecord:
         with self._lock:
@@ -142,10 +148,6 @@ class InspectionStore:
                     "INSERT INTO inspections (inspection_id, idempotency_key, request_hash, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
                     (inspection_id, idempotency_key, request_hash, "CREATED", now, now),
                 )
-                try:
-                    self.connection.execute("ALTER TABLE inspections ADD COLUMN evidence_json TEXT NOT NULL DEFAULT '{}'")
-                except sqlite3.OperationalError:
-                    pass
                 self._event(inspection_id, "inspection.created", payload)
             return self.get(inspection_id)
 

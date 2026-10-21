@@ -456,6 +456,10 @@ class _Handler(BaseHTTPRequestHandler):
             status, payload = self.api.handle(method, self.path, body, dict(self.headers.items()))
         except ApiError as exc:
             status, payload = exc.status, {"error": {"code": exc.code, "message": exc.message}}
+        except Exception:
+            # Keep browser clients on a JSON response even when a legacy local
+            # database or another server-side dependency fails unexpectedly.
+            status, payload = 500, {"error": {"code": "INTERNAL_ERROR", "message": "the inspection API could not complete the request"}}
         self._respond(status, payload)
 
     def do_GET(self) -> None:  # noqa: N802
