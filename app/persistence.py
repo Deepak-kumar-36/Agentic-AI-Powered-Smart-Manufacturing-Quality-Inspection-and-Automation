@@ -173,7 +173,7 @@ class InspectionStore:
                 ).rowcount
                 if updated != 1:
                     raise KeyError(inspection_id)
-                self._event(inspection_id, "inspection.decision_recorded", {"outcome": outcome, "reason_codes": reason_codes})
+                self._event(inspection_id, "inspection.decision_recorded", {"outcome": outcome, "reason_codes": reason_codes, "evidence": evidence or {}})
             return self.get(inspection_id)
 
     def get(self, inspection_id: str) -> InspectionRecord:
@@ -209,6 +209,8 @@ class InspectionStore:
             ).fetchone()
             payload = json.loads(provenance["payload"]) if provenance else {}
             image_hash = payload.get("image_sha256") if isinstance(payload.get("image_sha256"), str) else None
+            if image_hash is None:
+                image_hash = record.evidence.get("input_image_sha256") if isinstance(record.evidence.get("input_image_sha256"), str) else None
             if image_hash is None:
                 encoded = record.evidence.get("input_image_data")
                 if isinstance(encoded, str) and encoded.startswith("data:"):

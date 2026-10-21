@@ -91,6 +91,19 @@ node tests/dashboard_analytics.test.cjs
 python -m compileall -q app tests
 ```
 
+For changes to the reviewed-evidence path, run the focused offline workflow
+checks first:
+
+```bash
+python -m unittest tests.test_review_export tests.test_dataset_package tests.test_dataset_intake -v
+```
+
+These tests use synthetic PNG fixtures and cover export eligibility/redaction,
+ZIP validation, digest and image verification, invalid-package rejection, and
+safe staging. The end-to-end staging case verifies that the source ZIP remains
+unchanged, staged images are remapped to generated names, provenance/labels are
+preserved, and `training_approved` remains false.
+
 If Node.js is unavailable, the dashboard test is an explicit optional skip.
 
 ## 5. Start the backend API
@@ -138,12 +151,21 @@ python -m app.serve \
   --artifacts /path/to/efficientad_s_artifacts \
   --teacher /path/to/teacher_small.pth \
   --image-root /path/to/images \
+  --evidence-root /path/to/approved-legacy-evidence \
   --db data/inspection.sqlite3 \
   --threshold bottle:0.2:0.8 \
   --threshold screw:0.2:0.8 \
   --threshold capsule:0.2:0.8 \
   --device cuda
 ```
+
+New upload and phone-camera inspections use `--image-root` as managed evidence
+storage. The API validates the original bytes, records their SHA-256 and a
+relative reference, and uses atomic writes for captured/uploaded files. Add
+`--evidence-root` only for an explicitly approved legacy evidence directory;
+never trust a benchmark dataset directory as inspection evidence. Historical
+rows with missing evidence or hashes remain excluded and must be re-inspected
+if their original evidence cannot be independently recovered.
 
 The threshold values above are placeholders, not recommendations. The reviewed
 release loader rejects unqualified metadata, missing hashes, incompatible
@@ -308,8 +330,10 @@ end
 
 The staging operation creates a generated `candidate-<UUID>` directory with
 verified images, a remapped manifest, `staging-manifest.json`, and
-`validation-report.json`. It never overwrites an existing candidate or modifies
-the source ZIP or active datasets.
+`validation-report.json`. It never overwrites an existing candidate, publishes
+an invalid package, or modifies the source ZIP or active datasets. Existing
+report paths are also rejected rather than overwritten; choose a new report
+filename for each validation or staging run.
 
 ## 11. Docker verification
 

@@ -11,6 +11,9 @@ from dataclasses import asdict
 import base64
 from io import BytesIO
 import json
+import hashlib
+import os
+import tempfile
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -84,6 +87,7 @@ class InspectionApi:
         model: ImageScorer | None = None,
         policies: Mapping[str, DecisionPolicy] | None = None,
         image_root: str | Path | None = None,
+        evidence_roots: list[str | Path] | tuple[str | Path, ...] = (),
         metadata_provider: MetadataProvider | None = None,
         camera_source_factory: Any | None = None,
     ) -> None:
@@ -91,6 +95,7 @@ class InspectionApi:
         self.model = model
         self.policies = dict(policies or {})
         self.image_root = Path(image_root).resolve() if image_root is not None else None
+        self.evidence_roots = tuple(Path(value).resolve() for value in evidence_roots)
         self.metadata_provider = metadata_provider
         self._camera_lock = RLock()
         self._camera_source_factory = camera_source_factory or MjpegCameraSource
@@ -200,7 +205,7 @@ class InspectionApi:
     def _review_export_preview(self, query: str) -> tuple[int, dict[str, Any]]:
         try:
             limit, byte_limit, filters = self._export_query(query)
-            included, exclusions, _ = collect_review_export(self.store, image_root=self.image_root, limit=limit, byte_limit=byte_limit, filters=filters)
+            included, exclusions, _ = collect_review_export(self.store, image_root=self.image_root, evidence_roots=self.evidence_roots, limit=limit, byte_limit=byte_limit, filters=filters)
         except ValueError as exc:
             raise ApiError(400, "INVALID_EXPORT_QUERY", str(exc)) from exc
         return 200, {"included": included, "exclusions": exclusions, "summary": {"included_count": len(included), "excluded_count": len(exclusions), "exclusion_counts": {reason: sum(item["reason"] == reason for item in exclusions) for reason in sorted({item["reason"] for item in exclusions})}, "record_limit": limit, "byte_limit": byte_limit}}
@@ -209,7 +214,7 @@ class InspectionApi:
         parsed = urlsplit(path)
         try:
             limit, byte_limit, filters = self._export_query(parsed.query)
-            result = build_review_export(self.store, image_root=self.image_root, limit=limit, byte_limit=byte_limit, filters=filters)
+            result = build_review_export(self.store, image_root=self.image_root, evidence_roots=self.evidence_roots, limit=limit, byte_limit=byte_limit, filters=filters)
         except ValueError as exc:
             raise ApiError(400, "INVALID_EXPORT_QUERY", str(exc)) from exc
         return result.archive, result.filename, result.summary
@@ -302,10 +307,13 @@ class InspectionApi:
                 image_path = self.image_root / f"phone-camera-{uuid4().hex}.png"
                 image_buffer = BytesIO()
                 Image.fromarray(accepted.frame, mode="RGB").save(image_buffer, format="PNG")
-                image_path.write_bytes(image_buffer.getvalue())
-                record = self._decide(record.inspection_id, {"category": request["category"], "image_path": image_path.name}, evidence_extra={"input_image_data": "data:image/png;base64," + base64.b64encode(image_buffer.getvalue()).decode("ascii")})
-            except (CameraError, OSError, ValueError):
+                raw = image_buffer.getvalue()
+                self._atomic_store(image_path, raw)
+                record = self._decide(record.inspection_id, {"category": request["category"], "image_path": image_path.name}, evidence_extra=self._image_evidence(raw, image_path.name))
+            except (CameraError, ValueError):
                 record = self.store.record_decision(record.inspection_id, outcome="UNVERIFIED", reason_codes=["CAMERA_FRAME_INVALID"], policy_version="policy-unverified", model_version=None, score=None)
+            except OSError:
+                record = self.store.record_decision(record.inspection_id, outcome="UNVERIFIED", reason_codes=["EVIDENCE_STORAGE_FAILED"], policy_version="policy-unverified", model_version=None, score=None)
         return 200, _record_payload(record)
 
     def _create(self, body: bytes, headers: dict[str, str]) -> tuple[int, dict[str, Any]]:
@@ -322,9 +330,14 @@ class InspectionApi:
             raise ApiError(400, "INVALID_JSON", "request body must be a JSON object")
         if not isinstance(payload.get("category"), str) or not payload["category"].strip():
             raise ApiError(400, "CATEGORY_REQUIRED", "category is required")
+        payload = {key: value for key, value in payload.items() if key not in {"image_sha256", "input_image_sha256", "input_image_data"}}
+        image = self._image_bytes(payload.get("image_path"))
+        if image is not None:
+            payload["image_sha256"] = hashlib.sha256(image[1]).hexdigest()
         record = self.store.create(idempotency_key, payload)
         if record.outcome is None:
-            record = self._decide(record.inspection_id, payload)
+            evidence = self._image_evidence(image[1], payload.get("image_path")) if image is not None else None
+            record = self._decide(record.inspection_id, payload, evidence_extra=evidence)
         return 201, _record_payload(record)
 
     def _upload_image(self, body: bytes) -> tuple[int, dict[str, Any]]:
@@ -348,41 +361,51 @@ class InspectionApi:
             suffix = ".png"
         stored_name = f"dashboard-{uuid4().hex}{suffix}"
         target = self.image_root / stored_name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(raw)
-        return 201, {"image_path": stored_name, "bytes": len(raw)}
+        try:
+            self._atomic_store(target, raw)
+        except OSError as exc:
+            raise ApiError(503, "EVIDENCE_STORAGE_FAILED", "image evidence could not be stored") from exc
+        return 201, {"image_path": stored_name, "bytes": len(raw), "image_sha256": hashlib.sha256(raw).hexdigest()}
 
     def _decide(self, inspection_id: str, payload: dict[str, Any], *, evidence_extra: dict[str, Any] | None = None) -> InspectionRecord:
         category = payload["category"].strip()
+        evidence_payload: dict[str, Any] = dict(evidence_extra or {})
+        image_value = payload.get("image_path")
+        image = self._image_bytes(image_value) if image_value is not None else None
+        if image_value is not None and image is None:
+            return self.store.record_decision(
+                inspection_id, outcome="UNVERIFIED", reason_codes=["IMAGE_INVALID"],
+                policy_version=self.policies.get(category).version if category in self.policies else "policy-unverified",
+                model_version=None, score=None, evidence=evidence_payload,
+            )
         if self.model is None:
             return self.store.record_decision(
                 inspection_id, outcome="UNVERIFIED", reason_codes=["MODEL_NOT_READY"],
-                policy_version="policy-unverified", model_version=None, score=None,
+                policy_version="policy-unverified", model_version=None, score=None, evidence=evidence_payload,
             )
         policy = self.policies.get(category)
         if policy is None:
             return self.store.record_decision(
                 inspection_id, outcome="UNVERIFIED", reason_codes=["UNSUPPORTED_CATEGORY"],
-                policy_version="policy-unverified", model_version=None, score=None,
+                policy_version="policy-unverified", model_version=None, score=None, evidence=evidence_payload,
             )
-        image_path = self._image_path(payload.get("image_path"))
+        image_path = image[0] if image is not None else None
         if image_path is None:
             return self.store.record_decision(
                 inspection_id, outcome="UNVERIFIED", reason_codes=["IMAGE_INVALID"],
-                policy_version=policy.version, model_version=None, score=None,
+                policy_version=policy.version, model_version=None, score=None, evidence=evidence_payload,
             )
         try:
             evidence = self.model.score(category, image_path)
         except Exception:
             return self.store.record_decision(
                 inspection_id, outcome="UNVERIFIED", reason_codes=["MODEL_NOT_READY"],
-                policy_version=policy.version, model_version=None, score=None,
+                policy_version=policy.version, model_version=None, score=None, evidence=evidence_payload,
             )
         decision = policy.evaluate(
             InspectionInput(valid=True),
             ModelEvidence(model_version=evidence.model_version, score=evidence.score),
         )
-        evidence_payload: dict[str, Any] = dict(evidence_extra or {})
         heatmap = getattr(evidence, "heatmap", None)
         if heatmap is not None and self.image_root is not None:
             values = np.asarray(heatmap, dtype=np.float32)
@@ -417,6 +440,45 @@ class InspectionApi:
         else:
             candidate = candidate.resolve()
         return candidate if candidate.is_file() else None
+
+    def _image_bytes(self, value: Any) -> tuple[Path, bytes] | None:
+        path = self._image_path(value)
+        if path is None:
+            return None
+        try:
+            raw = path.read_bytes()
+            with Image.open(BytesIO(raw)) as image:
+                image.verify()
+        except (OSError, ValueError, SyntaxError):
+            return None
+        return path, raw
+
+    @staticmethod
+    def _image_evidence(raw: bytes, image_path: str | Path | None = None) -> dict[str, Any]:
+        evidence: dict[str, Any] = {
+            "input_image_sha256": hashlib.sha256(raw).hexdigest(),
+            "input_image_bytes": len(raw),
+        }
+        if isinstance(image_path, str) and not Path(image_path).is_absolute():
+            evidence["image_path"] = image_path
+        return evidence
+
+    @staticmethod
+    def _atomic_store(target: Path, raw: bytes) -> None:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        fd, temporary = tempfile.mkstemp(prefix=f".{target.name}.", dir=target.parent)
+        try:
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(raw)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, target)
+        except Exception:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+            raise
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -487,9 +549,10 @@ def serve(
     model: ImageScorer | None = None,
     policies: Mapping[str, DecisionPolicy] | None = None,
     image_root: str | Path | None = None,
+    evidence_roots: list[str | Path] | tuple[str | Path, ...] = (),
     metadata_provider: MetadataProvider | None = None,
 ) -> None:
-    api = InspectionApi(store, model=model, policies=policies, image_root=image_root, metadata_provider=metadata_provider)
+    api = InspectionApi(store, model=model, policies=policies, image_root=image_root, evidence_roots=evidence_roots, metadata_provider=metadata_provider)
     serve_api(api, host=host, port=port)
 
 

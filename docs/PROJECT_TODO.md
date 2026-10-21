@@ -1,6 +1,6 @@
 # Project TODO and Completion Checklist
 
-**Reviewed:** 2026-10-17 (Asia/Calcutta)
+**Reviewed:** 2026-10-21 (Asia/Calcutta)
 **Scope:** Documents 01–17, the production PRD, repository implementation, Kaggle EfficientAD-S run, and current automated checks.
 
 Legend: `[x]` verified complete, `[~]` implemented or partially evidenced, `[ ]` remaining, `[!]` blocked by an external dependency or decision.
@@ -14,7 +14,7 @@ Legend: `[x]` verified complete, `[~]` implemented or partially evidenced, `[ ]`
 - [x] Keep secrets, datasets, checkpoints, and generated artifacts out of Git.
 - [x] Keep an `.env.example` without secrets.
 - [x] Keep the repository on a working Git branch with incremental commits.
-- [x] Run the current test suite: 43 tests, 40 passed, 3 expected skips.
+- [x] Current test run observed: 125 tests, 122 passed, and 3 expected dependency skips; the focused evidence workflow and export tests pass.
 - [x] Run Python compilation and `git diff --check`.
 
 ## 2. Deterministic decision and persistence core
@@ -23,6 +23,8 @@ Legend: `[x]` verified complete, `[~]` implemented or partially evidenced, `[ ]`
 - [x] Fail closed for invalid images, stale input, unavailable models, incompatible versions, invalid scores, and review-band scores.
 - [x] Implement versioned deterministic threshold policies with boundary tests.
 - [x] Persist inspections transactionally in SQLite.
+- [x] Persist validated input-image hashes and managed evidence references for new upload and phone-camera inspections.
+- [x] Verify the synthetic inspection → review → ZIP export → validation → safe staging workflow.
 - [x] Persist immutable inspection events.
 - [x] Enforce idempotency keys and request-hash conflict detection.
 - [x] Verify persistence read-back and idempotency behavior with tests.
@@ -100,6 +102,7 @@ Legend: `[x]` verified complete, `[~]` implemented or partially evidenced, `[ ]`
 - [x] Add backend review coverage, latest-review agreement/disagreement, conflict, and attention analytics.
 - [x] Add bounded, redacted human-reviewed evidence export with eligibility preview, exclusions, provenance, and ZIP download.
 - [x] Validate untrusted reviewed-evidence ZIPs offline with bounded integrity/schema/security checks and deterministic reports; stage isolated candidates atomically without overwrites or assigned splits.
+- [x] Cover the export → ZIP validation → safe staging path with synthetic fixtures, including source ZIP immutability, digest binding, generated image paths, preserved labels/provenance, and `training_approved=false`.
 - [ ] Independently verify reviewer/capture provenance and collect missing sample/session grouping metadata before approving candidate evidence for evaluation or training.
 
 ## 8. ESP32, machine actions, and safety

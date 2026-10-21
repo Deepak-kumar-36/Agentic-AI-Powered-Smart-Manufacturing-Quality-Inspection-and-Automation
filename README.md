@@ -37,7 +37,7 @@ Install only into `.venv`; no global installation is required. Torch/torchvision
 make test
 ```
 
-The test command is offline and exercises policy threshold boundaries, invalid/stale evidence, unavailable and incompatible models, non-finite scores, and invalid policy configuration.
+The test command is offline and exercises policy threshold boundaries, invalid/stale evidence, unavailable and incompatible models, non-finite scores, invalid policy configuration, human-reviewed evidence export, ZIP integrity/schema/security validation, and safe candidate staging. The evidence workflow tests use synthetic image fixtures and do not alter source ZIPs or active datasets.
 
 Dashboard histogram regression tests use dependency-free Node.js built-in tests
 (optional Node.js 22.20.0 pinned in `.nvmrc`):
@@ -194,6 +194,7 @@ python -m app.serve \
   --artifacts /path/to/efficientad_s_artifacts \
   --teacher /path/to/teacher_small.pth \
   --image-root /path/to/images \
+  --evidence-root /path/to/approved-legacy-evidence \
   --db data/inspection.sqlite3 \
   --threshold bottle:0.2:0.8 \
   --threshold screw:0.2:0.8 \
@@ -205,6 +206,13 @@ The example thresholds are placeholders and must not be used without review.
 The CLI uses `data/inspection.sqlite3` by default so inspections and event
 history survive API restarts. The `data/` directory is intentionally ignored by
 Git.
+
+`--image-root` is the managed evidence directory for new uploads and phone-camera
+captures. New inspections validate the image bytes, compute SHA-256 from those
+bytes, atomically store captured evidence, and persist the hash plus a relative
+evidence reference before recording the decision. Additional `--evidence-root`
+values are explicit, optional, and intended only for approved legacy evidence;
+do not point them at benchmark datasets such as `data/mvtec_ad/archive`.
 
 Check the service after startup:
 
@@ -374,6 +382,18 @@ The original ZIP and existing datasets/releases remain unchanged. Staging does
 not copy untrusted README/CSV text into the candidate or assign any splits.
 Use the dedicated ignored `data/reviewed-staging` location, separate from active
 datasets. Keep grouping identifiers intact for future split planning.
+
+The end-to-end fixture coverage for this path is in
+`tests/test_dataset_intake.py::DatasetIntakeTests::test_exporter_fixture_stages_preserving_human_labels_and_provenance`.
+It builds a ZIP with `app.review_export.build`, validates it with
+`app.dataset_package.validate_package`, stages it with
+`app.dataset_intake.stage_package`, and checks generated image names, remapped
+manifest paths, source digest binding, candidate-only metadata, and source ZIP
+immutability. Run the focused evidence checks with:
+
+```bash
+python -m unittest tests.test_review_export tests.test_dataset_package tests.test_dataset_intake -v
+```
 
 Readiness warnings cover missing sample/session IDs, repeated groups that must
 stay together, missing provenance, low record counts (under 20), class imbalance

@@ -48,7 +48,7 @@ def _created_payload(store: InspectionStore, inspection_id: str) -> dict[str, An
     return {}
 
 
-def _image_bytes(record: InspectionRecord, created: dict[str, Any], image_root: Path | None) -> tuple[bytes | None, str | None]:
+def _image_bytes(record: InspectionRecord, created: dict[str, Any], image_root: Path | None, evidence_roots: tuple[Path, ...] = ()) -> tuple[bytes | None, str | None]:
     encoded = record.evidence.get("input_image_data")
     if isinstance(encoded, str) and encoded.startswith("data:"):
         try:
@@ -59,17 +59,22 @@ def _image_bytes(record: InspectionRecord, created: dict[str, Any], image_root: 
         except (ValueError, base64.binascii.Error):
             return None, "INVALID_IMAGE_DATA"
     image_path = created.get("image_path")
-    if not isinstance(image_path, str) or image_root is None:
+    roots = tuple(dict.fromkeys(root for root in ((image_root,) + evidence_roots) if root is not None))
+    if not isinstance(image_path, str) or not roots:
         return None, "EVIDENCE_UNAVAILABLE"
-    candidate = (image_root / image_path).resolve()
-    try:
-        candidate.relative_to(image_root)
-    except ValueError:
-        return None, "UNSAFE_EVIDENCE_PATH"
-    try:
-        return candidate.read_bytes(), None
-    except OSError:
-        return None, "EVIDENCE_UNAVAILABLE"
+    found_candidate = False
+    for root in roots:
+        candidate = Path(image_path).resolve() if Path(image_path).is_absolute() else (root / image_path).resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            continue
+        found_candidate = True
+        try:
+            return candidate.read_bytes(), None
+        except OSError:
+            continue
+    return None, "EVIDENCE_UNAVAILABLE" if found_candidate else "UNSAFE_EVIDENCE_PATH"
 
 
 def _validate_image(raw: bytes) -> str | None:
@@ -93,10 +98,13 @@ def _recorded_hash(record: InspectionRecord, review: InspectionReview, created: 
     if review.input_image_hash:
         return review.input_image_hash
     value = created.get("image_sha256")
+    if isinstance(value, str) and value:
+        return value
+    value = record.evidence.get("input_image_sha256")
     return value if isinstance(value, str) and value else None
 
 
-def _candidate(store: InspectionStore, record: InspectionRecord, image_root: Path | None) -> tuple[dict[str, Any] | None, str | None, bytes | None]:
+def _candidate(store: InspectionStore, record: InspectionRecord, image_root: Path | None, evidence_roots: tuple[Path, ...] = ()) -> tuple[dict[str, Any] | None, str | None, bytes | None]:
     reviews = store.reviews(record.inspection_id)
     if not reviews:
         return None, "NO_HUMAN_REVIEW", None
@@ -107,7 +115,7 @@ def _candidate(store: InspectionStore, record: InspectionRecord, image_root: Pat
     if latest.outcome not in {"CONFIRMED_NORMAL", "CONFIRMED_DEFECT"}:
         return None, "LATEST_REVIEW_NOT_DEFINITIVE", None
     created = _created_payload(store, record.inspection_id)
-    raw, reason = _image_bytes(record, created, image_root)
+    raw, reason = _image_bytes(record, created, image_root, evidence_roots)
     if reason:
         return None, reason, None
     assert raw is not None
@@ -147,12 +155,13 @@ def _summary(included: list[dict[str, Any]], exclusions: list[dict[str, str]], *
     return {"included_count": len(included), "excluded_count": len(exclusions), "exclusion_counts": {reason: sum(item["reason"] == reason for item in exclusions) for reason in sorted({item["reason"] for item in exclusions})}, "export_complete": complete, "record_limit": limit, "byte_limit": byte_limit}
 
 
-def collect(store: InspectionStore, *, image_root: str | Path | None = None, limit: int = MAX_EXPORT_RECORDS, byte_limit: int = MAX_EXPORT_BYTES, filters: dict[str, str] | None = None) -> tuple[list[dict[str, Any]], list[dict[str, str]], dict[str, bytes]]:
+def collect(store: InspectionStore, *, image_root: str | Path | None = None, evidence_roots: list[str | Path] | tuple[str | Path, ...] = (), limit: int = MAX_EXPORT_RECORDS, byte_limit: int = MAX_EXPORT_BYTES, filters: dict[str, str] | None = None) -> tuple[list[dict[str, Any]], list[dict[str, str]], dict[str, bytes]]:
     if not 1 <= limit <= MAX_EXPORT_RECORDS:
         raise ValueError(f"limit must be between 1 and {MAX_EXPORT_RECORDS}")
     if not 1 <= byte_limit <= MAX_EXPORT_BYTES:
         raise ValueError(f"byte_limit must be between 1 and {MAX_EXPORT_BYTES}")
     root = Path(image_root).resolve() if image_root is not None else None
+    roots = tuple(Path(value).resolve() for value in evidence_roots)
     included: list[dict[str, Any]] = []
     exclusions: list[dict[str, str]] = []
     images: dict[str, bytes] = {}
@@ -162,7 +171,7 @@ def collect(store: InspectionStore, *, image_root: str | Path | None = None, lim
         latest = reviews[-1] if reviews else None
         if filters and ((filters.get("review_outcome") and (latest.outcome if latest else None) != filters["review_outcome"]) or (filters.get("ai_outcome") and record.outcome != filters["ai_outcome"])):
             continue
-        metadata, reason, raw = _candidate(store, record, root)
+        metadata, reason, raw = _candidate(store, record, root, roots)
         if reason:
             exclusions.append({"inspection_id": record.inspection_id, "reason": reason})
             continue
@@ -182,8 +191,8 @@ def collect(store: InspectionStore, *, image_root: str | Path | None = None, lim
     return included, exclusions, images
 
 
-def build(store: InspectionStore, *, image_root: str | Path | None = None, limit: int = MAX_EXPORT_RECORDS, byte_limit: int = MAX_EXPORT_BYTES, filters: dict[str, str] | None = None) -> ExportResult:
-    included, exclusions, images = collect(store, image_root=image_root, limit=limit, byte_limit=byte_limit, filters=filters)
+def build(store: InspectionStore, *, image_root: str | Path | None = None, evidence_roots: list[str | Path] | tuple[str | Path, ...] = (), limit: int = MAX_EXPORT_RECORDS, byte_limit: int = MAX_EXPORT_BYTES, filters: dict[str, str] | None = None) -> ExportResult:
+    included, exclusions, images = collect(store, image_root=image_root, evidence_roots=evidence_roots, limit=limit, byte_limit=byte_limit, filters=filters)
     summary = _summary(included, exclusions, complete=True, limit=limit, byte_limit=byte_limit)
     output = BytesIO()
     with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:

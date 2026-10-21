@@ -54,6 +54,16 @@ class InspectionStoreTests(unittest.TestCase):
             self.assertEqual(len(reopened.events(record.inspection_id)), 2)
             reopened.close()
 
+    def test_decision_event_retains_evidence_provenance(self) -> None:
+        store = InspectionStore()
+        try:
+            record = store.create("evidence-event", {"category": "bottle", "image_sha256": "abc"})
+            store.record_decision(record.inspection_id, outcome="UNVERIFIED", reason_codes=["MODEL_NOT_READY"], policy_version="policy-unverified", model_version=None, score=None, evidence={"input_image_sha256": "abc"})
+            decision = store.events(record.inspection_id)[-1]
+            self.assertEqual(decision["payload"]["evidence"]["input_image_sha256"], "abc")
+        finally:
+            store.close()
+
     def test_same_idempotency_key_returns_same_record(self) -> None:
         store = InspectionStore()
         first = store.create("same", {"category": "bottle"})

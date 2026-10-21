@@ -1,5 +1,6 @@
 import json
 import base64
+import hashlib
 from pathlib import Path
 import tempfile
 import unittest
@@ -126,7 +127,7 @@ class InspectionApiTests(unittest.TestCase):
     def test_configured_model_records_policy_decision(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             image = Path(directory) / "sample.png"
-            image.write_bytes(b"image-placeholder")
+            image.write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\xcf\xc0\x00\x00\x03\x01\x01\x00\xc9\xfe\x92\xef\x00\x00\x00\x00IEND\xaeB`\x82")
             api = InspectionApi(
                 InspectionStore(),
                 model=FakeModel(0.1),
@@ -217,7 +218,7 @@ class InspectionApiTests(unittest.TestCase):
     def test_missing_heatmap_is_reported_without_fabricating_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             image = Path(directory) / "sample.png"
-            image.write_bytes(b"image-placeholder")
+            image.write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\xcf\xc0\x00\x00\x03\x01\x01\x00\xc9\xfe\x92\xef\x00\x00\x00\x00IEND\xaeB`\x82")
             api = InspectionApi(
                 InspectionStore(),
                 model=FakeModel(0.1),
@@ -230,14 +231,15 @@ class InspectionApiTests(unittest.TestCase):
                     {"Idempotency-Key": "missing-heatmap"},
                 )[1]
                 self.assertEqual(record["outcome"], "PASS")
-                self.assertEqual(record["evidence"], {})
+                self.assertEqual(record["evidence"]["input_image_bytes"], 69)
+                self.assertNotIn("heatmap_url", record["evidence"])
             finally:
                 api.store.close()
 
     def test_heatmap_evidence_survives_read_back(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             image = Path(directory) / "sample.png"
-            image.write_bytes(b"image-placeholder")
+            image.write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\xcf\xc0\x00\x00\x03\x01\x01\x00\xc9\xfe\x92\xef\x00\x00\x00\x00IEND\xaeB`\x82")
             class HeatmapModel(FakeModel):
                 def score(self, _category: str, _image: str | Path) -> FakeEvidence:
                     return FakeEvidence(0.1, [[0.0, 1.0], [0.5, 0.25]])
@@ -251,6 +253,21 @@ class InspectionApiTests(unittest.TestCase):
                 self.assertTrue(record["evidence"]["heatmap_url"].startswith("data:image/png;base64,"))
                 loaded = api.handle("GET", f"/api/v1/inspections/{record['inspection_id']}")[1]
                 self.assertEqual(loaded["evidence"], record["evidence"])
+            finally:
+                api.store.close()
+
+    def test_direct_image_records_hash_from_actual_bytes_and_validates_content(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "sample.png"
+            raw = image.read_bytes() if image.exists() else b""
+            raw = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\xcf\xc0\x00\x00\x03\x01\x01\x00\xc9\xfe\x92\xef\x00\x00\x00\x00IEND\xaeB`\x82"
+            image.write_bytes(raw)
+            api = InspectionApi(InspectionStore(), image_root=directory)
+            try:
+                record = api.handle("POST", "/api/v1/inspections", json.dumps({"category": "bottle", "image_path": "sample.png"}).encode(), {"Idempotency-Key": "direct-hash"})[1]
+                self.assertEqual(record["evidence"]["input_image_sha256"], hashlib.sha256(raw).hexdigest())
+                created = api.handle("GET", f"/api/v1/inspections/{record['inspection_id']}/events")[1]["items"][0]["payload"]
+                self.assertEqual(created["image_sha256"], record["evidence"]["input_image_sha256"])
             finally:
                 api.store.close()
 
@@ -274,11 +291,47 @@ class InspectionApiTests(unittest.TestCase):
                 status, record = api.handle("POST", "/api/v1/camera/capture-inspection", json.dumps({"category": "bottle"}).encode(), {"Idempotency-Key": "camera-one"})
                 self.assertEqual(status, 200)
                 self.assertEqual(record["outcome"], "PASS")
-                self.assertTrue(record["evidence"]["input_image_data"].startswith("data:image/png;base64,"))
+                stored = next(Path(directory).glob("phone-camera-*.png"))
+                self.assertEqual(record["evidence"]["input_image_sha256"], hashlib.sha256(stored.read_bytes()).hexdigest())
                 events = api.handle("GET", f"/api/v1/inspections/{record['inspection_id']}/events")[1]["items"]
                 self.assertEqual([event["event_type"] for event in events], ["inspection.created", "inspection.decision_recorded"])
                 duplicate = api.handle("POST", "/api/v1/camera/capture-inspection", json.dumps({"category": "bottle"}).encode(), {"Idempotency-Key": "camera-one"})[1]
                 self.assertEqual(duplicate["inspection_id"], record["inspection_id"])
+            finally:
+                api.store.close()
+
+    def test_phone_camera_preserves_input_evidence_when_model_is_unavailable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            now = datetime.now(timezone.utc)
+            frame = type("Frame", (), {"frame": np.zeros((64, 64, 3), dtype=np.uint8), "captured_at_utc": now.isoformat(), "camera_id": "fake", "sequence_no": 1, "width": 64, "height": 64})()
+            source = FakeCamera(frame)
+            api = InspectionApi(InspectionStore(), image_root=directory, camera_source_factory=lambda _url: source)
+            try:
+                api.handle("POST", "/api/v1/camera/configure", json.dumps({"url": "http://127.0.0.1:8080/video"}).encode())
+                status, record = api.handle("POST", "/api/v1/camera/capture-inspection", json.dumps({"category": "bottle"}).encode(), {"Idempotency-Key": "camera-unavailable"})
+                self.assertEqual(status, 200)
+                self.assertEqual(record["reason_codes"], ["MODEL_NOT_READY"])
+                stored = next(Path(directory).glob("phone-camera-*.png"))
+                self.assertEqual(record["evidence"]["input_image_bytes"], stored.stat().st_size)
+                self.assertEqual(record["evidence"]["input_image_sha256"], hashlib.sha256(stored.read_bytes()).hexdigest())
+                self.assertEqual(record["evidence"]["image_path"], stored.name)
+            finally:
+                api.store.close()
+
+    def test_phone_camera_storage_failure_is_explicit_and_has_no_verified_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            now = datetime.now(timezone.utc)
+            frame = type("Frame", (), {"frame": np.zeros((64, 64, 3), dtype=np.uint8), "captured_at_utc": now.isoformat(), "camera_id": "fake", "sequence_no": 1, "width": 64, "height": 64})()
+            source = FakeCamera(frame)
+            api = InspectionApi(InspectionStore(), image_root=directory, camera_source_factory=lambda _url: source)
+            api._atomic_store = lambda *_args: (_ for _ in ()).throw(OSError("disk full"))
+            try:
+                api.handle("POST", "/api/v1/camera/configure", json.dumps({"url": "http://127.0.0.1:8080/video"}).encode())
+                status, record = api.handle("POST", "/api/v1/camera/capture-inspection", json.dumps({"category": "bottle"}).encode(), {"Idempotency-Key": "camera-storage-failure"})
+                self.assertEqual(status, 200)
+                self.assertEqual(record["outcome"], "UNVERIFIED")
+                self.assertEqual(record["reason_codes"], ["EVIDENCE_STORAGE_FAILED"])
+                self.assertEqual(record["evidence"], {})
             finally:
                 api.store.close()
 

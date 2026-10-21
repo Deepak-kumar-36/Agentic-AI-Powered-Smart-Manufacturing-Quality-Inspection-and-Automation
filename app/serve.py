@@ -30,6 +30,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--artifacts", type=Path, required=True, help="root of downloaded EfficientAD artifacts")
     parser.add_argument("--teacher", type=Path, required=True, help="path to teacher_small.pth")
     parser.add_argument("--image-root", type=Path, required=True, help="directory containing request images")
+    parser.add_argument("--evidence-root", action="append", type=Path, default=[], help="additional managed directory for resolving recorded evidence paths")
     parser.add_argument("--db", type=Path, default=Path("data/inspection.sqlite3"), help="durable SQLite database path")
     parser.add_argument("--threshold", action="append", type=parse_threshold, required=True, help="category:pass:fail; repeat per category")
     parser.add_argument("--device", default="cpu", choices=("cpu", "cuda"))
@@ -43,7 +44,7 @@ def main(argv: list[str] | None = None) -> int:
     thresholds = dict(args.threshold)
     release = load_reviewed_release(args.metadata, args.artifacts, args.teacher, thresholds)
     args.db.parent.mkdir(parents=True, exist_ok=True)
-    api = release.create_api(device=args.device, image_root=args.image_root, store=InspectionStore(args.db))
+    api = release.create_api(device=args.device, image_root=args.image_root, evidence_roots=args.evidence_root, store=InspectionStore(args.db))
     serve_api(api, host=args.host, port=args.port)
     return 0
 

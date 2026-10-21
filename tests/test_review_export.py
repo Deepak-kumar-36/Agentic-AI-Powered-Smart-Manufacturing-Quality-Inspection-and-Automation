@@ -118,6 +118,20 @@ class ReviewExportTests(unittest.TestCase):
         self.assertEqual(exclusions[0]["reason"], "UNSAFE_EVIDENCE_PATH")
         self.assertNotIn(str(self.root), json.dumps(exclusions))
 
+    def test_managed_evidence_root_resolves_recorded_path_without_inline_data(self):
+        raw = png_bytes((8, 9, 10))
+        managed = self.root / "phone-shadow"
+        managed.mkdir()
+        (managed / "capture.png").write_bytes(raw)
+        inspection_id = self.add("managed", raw, image_path="capture.png")
+        self.store.connection.execute("UPDATE inspections SET evidence_json = ? WHERE inspection_id = ?", ("{}", inspection_id))
+
+        included, exclusions, images = collect(self.store, image_root=self.root / "images", evidence_roots=[managed])
+
+        self.assertEqual([item["inspection_id"] for item in included], [inspection_id])
+        self.assertEqual(exclusions, [])
+        self.assertEqual(list(images.values()), [raw])
+
 
 if __name__ == "__main__":
     unittest.main()

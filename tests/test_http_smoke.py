@@ -1,9 +1,12 @@
 import json
+import io
 from pathlib import Path
 import tempfile
 import threading
 import unittest
 from urllib.request import Request, urlopen
+
+from PIL import Image
 
 from app.api import InspectionApi, create_server
 from app.policy import DecisionPolicy
@@ -24,7 +27,9 @@ class HttpSmokeTests(unittest.TestCase):
     def test_live_health_and_model_backed_inspection(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             image = Path(directory) / "sample.png"
-            image.write_bytes(b"placeholder")
+            output = io.BytesIO()
+            Image.new("RGB", (2, 2), (20, 40, 60)).save(output, format="PNG")
+            image.write_bytes(output.getvalue())
             store = InspectionStore()
             api = InspectionApi(
                 store,
