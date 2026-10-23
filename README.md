@@ -655,3 +655,10 @@ idempotency-key replay protection, decision read-back, and immutable event rows.
 ## Safety and readiness
 
 Hardware actuation is absent and disabled by design. Do not use this slice to control a motor, servo, PLC, or production equipment. The project remains below Gate A verification until the test command has been executed in a functioning environment.
+
+
+## Experimental Gemini vision assessment
+
+An optional Gemini image assessment is available for demonstrations. It is disabled by default and runs only when an operator selects an inspection and presses **Run Vision AI Assessment**. Install the optional dependency with `pip install -e '.[vision]'`, then set `VISION_API_ENABLED=true`, `GEMINI_API_KEY`, `VISION_API_MODEL` (default `gemini-flash-latest`), and `VISION_API_TIMEOUT_SECONDS` (default 20) in the server environment. Never put the key in browser configuration. The backend endpoint is `POST /api/v1/inspections/{inspection_id}/vision-assessment` with an empty JSON object. It returns `LIKELY_NORMAL`, `POSSIBLE_DEFECT`, or `INCONCLUSIVE`, a supported defect category or `unknown`, observations, limitations, provider and model identifiers, `evaluation_mode: DEMO_ADVISORY`, and `qualified: false`.
+
+The advisory never changes the persisted inspection outcome, decision policy, human reviews, qualification, dataset provenance, or ESP32 state. It cannot cause physical actions. Errors distinguish disabled service, missing credentials, invalid evidence/output, rate limiting, timeout, and provider failure. Per-inspection requests are throttled. Images explicitly submitted are transmitted to Google for API processing and are subject to applicable Google terms, privacy policies, retention rules, and usage charges. This prototype feature is not qualified for production inspection and its output is not calibrated.

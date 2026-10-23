@@ -94,6 +94,8 @@ Legend: `[x]` verified complete, `[~]` implemented or partially evidenced, `[ ]`
 
 ## 7. Dashboard and operator workflow
 
+- [x] Add opt-in Gemini vision assessment as a separate experimental advisory; it never changes decisions, reviews, qualification, or hardware commands.
+
 - [x] Define a dependency-free browser dashboard against the existing HTTP API contract.
 - [x] Build status, inspection history, evidence, and event timeline views.
 - [x] Add local image upload into the configured API image root.

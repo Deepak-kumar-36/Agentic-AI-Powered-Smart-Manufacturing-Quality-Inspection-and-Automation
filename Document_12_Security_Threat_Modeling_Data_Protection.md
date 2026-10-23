@@ -392,3 +392,17 @@ Resolve these based on the actual implementation and deployment plan:
 ## 18. Final Security Rule
 
 The platform must prefer **known-safe hold and transparent failure** over a convenient but unverified result. No model, agent, API request, dashboard control, retry mechanism, or firmware message may bypass deterministic policy, immutable traceability, or bounded physical actions.
+
+## Experimental Gemini vision assessment data handling
+
+The optional Gemini advisory path is disabled by default and sends no image
+unless an operator explicitly requests an assessment for a selected inspection.
+The backend accepts only an inspection ID, resolves a relative image reference
+inside configured managed evidence roots, validates its bytes and stored SHA-256,
+and sends only that image to Google. It does not accept client filesystem paths
+or transmit inspection databases, API credentials, or unrelated record metadata.
+The server-side key is never returned to the dashboard or written to logs.
+Images sent to Google are subject to applicable provider terms, privacy policy,
+retention practices, and usage charges. The provider call has a bounded timeout
+and per-inspection request throttle. Its `DEMO_ADVISORY` output is unqualified
+and has no path to decision persistence, training labels, or hardware commands.

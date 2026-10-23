@@ -413,3 +413,19 @@ Stop the API and dashboard with `Ctrl-C`. The persistent SQLite database and
 local staged data are under ignored `data/` paths when those options are used.
 Do not delete them blindly if the inspection history or staged candidate is
 needed. The default short API command uses in-memory state and loses it on exit.
+
+
+## 14. Optional Gemini vision assessment (demo only)
+
+The provider is disabled by default. Install its optional SDK with `pip install -e '.[vision]'`. Configure these variables in the API server environment (never in dashboard/browser settings):
+
+```env
+VISION_API_ENABLED=true
+GEMINI_API_KEY=your-server-side-key
+VISION_API_MODEL=gemini-flash-latest
+VISION_API_TIMEOUT_SECONDS=20
+```
+
+An operator selects an existing inspection that has managed, hash-verified image evidence and explicitly presses **Run Vision AI Assessment**. The API is `POST /api/v1/inspections/{inspection_id}/vision-assessment` with `{}`; client image paths, hashes, scores, and outcomes are not accepted. The response contains an assessment (`LIKELY_NORMAL`, `POSSIBLE_DEFECT`, or `INCONCLUSIVE`), a supported defect type, observations, limitations, provider/model, `DEMO_ADVISORY`, and `qualified: false`.
+
+Errors use stable codes such as `VISION_DISABLED`, `VISION_CREDENTIALS_MISSING`, `INVALID_EVIDENCE`, `VISION_INVALID_RESPONSE`, `VISION_TIMEOUT`, `VISION_RATE_LIMITED`, and `VISION_PROVIDER_ERROR`. Repeated requests are bounded per inspection. The API key stays server-side. Selected images are sent to Google for API processing and are subject to Google terms, privacy policies, retention practices, and usage charges. Results are not calibrated and never change the official decision, create human reviews, qualify training evidence, or issue hardware commands. No external call occurs at startup, page load, upload, refresh, or ordinary inspection time.

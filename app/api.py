@@ -33,6 +33,7 @@ from .camera import CameraError, FramePolicy, FreshFrameSelector, MjpegCameraSou
 from .policy import DecisionPolicy, InspectionInput, ModelEvidence, reason_values
 from .hardware import DisabledHardware
 from .structured_logging import correlation_context, get_request_id, get_correlation_id, logger, set_inspection_id
+from .vision_assessment import VisionAssessmentService, VisionError
 
 
 
@@ -95,6 +96,7 @@ class InspectionApi:
         metadata_provider: MetadataProvider | None = None,
         camera_source_factory: Any | None = None,
         hardware: Any | None = None,
+        vision_assessment: VisionAssessmentService | None = None,
     ) -> None:
         self.store = store or InspectionStore()
         self.model = model
@@ -108,6 +110,7 @@ class InspectionApi:
         self._camera_url: str | None = None
         self._camera_selector = FreshFrameSelector(FramePolicy(max_age_ms=1000))
         self.hardware = hardware or DisabledHardware()
+        self.vision_assessment = vision_assessment or VisionAssessmentService()
 
     def reload_model(self, category: str | None = None) -> list[str]:
         """Invalidate the injected model cache after reviewed artifact replacement."""
@@ -172,6 +175,8 @@ class InspectionApi:
                     return 200, {"items": [asdict(review) for review in self.store.reviews(inspection_id)]}
                 if method == "GET" and len(segments) == 6 and segments[5] == "events":
                     return 200, {"items": self.store.events(inspection_id)}
+                if method == "POST" and len(segments) == 6 and segments[5] == "vision-assessment":
+                    return self._vision_assessment(inspection_id, body)
                 if method == "POST" and len(segments) == 6 and segments[5] == "reviews":
                     return self._create_review(inspection_id, body)
                 return 200, _record_payload(self.store.get(inspection_id))
@@ -182,6 +187,48 @@ class InspectionApi:
             raise ApiError(404, "INSPECTION_NOT_FOUND", str(exc.args[0])) from exc
         except (ValueError, json.JSONDecodeError) as exc:
             raise ApiError(400, "INVALID_REQUEST", str(exc)) from exc
+
+    def _vision_assessment(self, inspection_id: str, body: bytes) -> tuple[int, dict[str, Any]]:
+        if len(body) > 1024:
+            raise ApiError(413, "REQUEST_TOO_LARGE", "vision request must not exceed 1 KiB")
+        if body not in (b"", b"{}"):
+            raise ApiError(400, "INVALID_REQUEST", "vision assessment request accepts no client-supplied image or metadata")
+        try:
+            record = self.store.get(inspection_id)
+        except KeyError as exc:
+            raise ApiError(404, "INSPECTION_NOT_FOUND", "inspection was not found") from exc
+        image_ref = record.evidence.get("image_path")
+        # Advisory reads only relative references under explicitly configured
+        # evidence roots. A legacy absolute request path is never trusted here.
+        image = None
+        if isinstance(image_ref, str) and image_ref and not Path(image_ref).is_absolute():
+            for root in ((self.image_root,) if self.image_root is not None else ()) + self.evidence_roots:
+                candidate = (root / image_ref).resolve()
+                try:
+                    candidate.relative_to(root)
+                except ValueError:
+                    continue
+                try:
+                    raw_candidate = candidate.read_bytes()
+                    with Image.open(BytesIO(raw_candidate)) as decoded:
+                        decoded.verify()
+                    image = (candidate, raw_candidate)
+                    break
+                except (OSError, ValueError, SyntaxError):
+                    continue
+        if image is None:
+            raise ApiError(422, "INVALID_EVIDENCE", "inspection has no valid managed image evidence")
+        raw = image[1]
+        recorded_hash = record.evidence.get("input_image_sha256")
+        if not recorded_hash or hashlib.sha256(raw).hexdigest() != recorded_hash:
+            raise ApiError(422, "INVALID_EVIDENCE", "managed image evidence failed integrity validation")
+        try:
+            result = self.vision_assessment.assess(inspection_id, raw, "image/jpeg")
+        except VisionError as exc:
+            logger.warning("vision.assessment.failed", inspection_id=inspection_id, error_code=exc.code)
+            raise ApiError(503 if exc.code not in {"VISION_DISABLED", "VISION_CREDENTIALS_MISSING", "VISION_RATE_LIMITED", "INVALID_EVIDENCE", "VISION_INVALID_RESPONSE"} else (429 if exc.code == "VISION_RATE_LIMITED" else 422 if exc.code in {"INVALID_EVIDENCE", "VISION_INVALID_RESPONSE"} else 409), exc.code, exc.message) from exc
+        logger.info("vision.assessment.completed", inspection_id=inspection_id, assessment=result["assessment"], provider="gemini", model=result["model"], evaluation_mode="DEMO_ADVISORY")
+        return 200, result
 
 
     def _metadata(self) -> tuple[int, dict[str, Any]]:

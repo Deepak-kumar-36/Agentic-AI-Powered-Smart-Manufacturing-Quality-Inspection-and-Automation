@@ -11,6 +11,7 @@ dependencies = ["numpy==2.2.6", "Pillow==12.3.0"]
 
 [project.optional-dependencies]
 hardware = ["pyserial>=3.5,<4"]
+vision = ["google-genai>=1.0,<2"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
