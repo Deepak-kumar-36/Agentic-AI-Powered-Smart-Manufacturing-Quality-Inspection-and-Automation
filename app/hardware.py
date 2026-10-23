@@ -63,15 +63,61 @@ class DisabledHardware:
 class Esp32Bridge:
     """Bounded serial bridge; transport failures never affect persisted inspections."""
 
-    def __init__(self, transport: SerialTransport, *, read_timeout_s: float = 0.2, stale_after_s: float = 5.0) -> None:
+    def __init__(
+        self,
+        transport: SerialTransport,
+        *,
+        read_timeout_s: float = 0.2,
+        stale_after_s: float = 5.0,
+        heartbeat_interval_s: float = 1.0,
+    ) -> None:
         self._transport = transport
         self._read_timeout_s = read_timeout_s
         self._stale_after_s = stale_after_s
+        self._heartbeat_interval_s = heartbeat_interval_s
         self._lock = Lock()
+        self._write_lock = Lock()
         self._stop = Event()
         self._snapshot = HardwareSnapshot(True, "connected", None, None, None, None, "off", None, None, None)
-        self._thread = Thread(target=self._reader, name="esp32-serial-reader", daemon=True)
-        self._thread.start()
+        self._reader_thread = Thread(target=self._reader, name="esp32-serial-reader", daemon=True)
+        self._heartbeat_thread = Thread(target=self._heartbeat_worker, name="esp32-heartbeat", daemon=True)
+        self._reader_thread.start()
+        self._heartbeat_thread.start()
+
+    def _write_line(self, payload: dict[str, Any]) -> None:
+        raw = _message(payload)
+        with self._write_lock:
+            self._transport.write(raw)
+
+    def _send_heartbeat(self) -> None:
+        self._write_line({"type": "heartbeat"})
+
+    def _heartbeat_worker(self) -> None:
+        # Emit an immediate initial heartbeat to refresh link state and trigger controller.status
+        try:
+            self._send_heartbeat()
+        except Exception:
+            pass
+
+        while not self._stop.is_set():
+            if self._stop.wait(self._heartbeat_interval_s):
+                break
+            with self._lock:
+                is_connected = self._snapshot.state != "disconnected"
+            if not is_connected:
+                continue
+            try:
+                self._send_heartbeat()
+            except Exception as exc:
+                with self._lock:
+                    old = self._snapshot
+                    self._snapshot = HardwareSnapshot(
+                        True, "disconnected", str(exc),
+                        old.last_command_id, old.last_command_state,
+                        old.last_decision, "off",
+                        old.sensor_active, old.sensor_updated_at,
+                        old.firmware_version,
+                    )
 
     def _reader(self) -> None:
         while not self._stop.is_set():
@@ -188,7 +234,12 @@ class Esp32Bridge:
             raise ValueError("invalid hardware decision")
         command_id = uuid4().hex
         try:
-            self._transport.write(_message({"type": "inspection.disposition", "command_id": command_id, "inspection_id": inspection_id, "decision": decision}))
+            self._write_line({
+                "type": "inspection.disposition",
+                "command_id": command_id,
+                "inspection_id": inspection_id,
+                "decision": decision,
+            })
         except Exception as exc:
             with self._lock:
                 old = self._snapshot
@@ -210,8 +261,9 @@ class Esp32Bridge:
     def reconnect(self, new_transport: SerialTransport) -> None:
         """Safely attach a new transport upon reconnection."""
         with self._lock:
-            old_transport = self._transport
-            self._transport = new_transport
+            with self._write_lock:
+                old_transport = self._transport
+                self._transport = new_transport
             self._snapshot = HardwareSnapshot(
                 True, "connected", None,
                 self._snapshot.last_command_id, self._snapshot.last_command_state,
@@ -223,10 +275,17 @@ class Esp32Bridge:
             old_transport.close()
         except Exception:
             pass
-        if not self._thread.is_alive():
-            self._stop.clear()
-            self._thread = Thread(target=self._reader, name="esp32-serial-reader", daemon=True)
-            self._thread.start()
+        if not self._reader_thread.is_alive():
+            self._reader_thread = Thread(target=self._reader, name="esp32-serial-reader", daemon=True)
+            self._reader_thread.start()
+        if not self._heartbeat_thread.is_alive():
+            self._heartbeat_thread = Thread(target=self._heartbeat_worker, name="esp32-heartbeat", daemon=True)
+            self._heartbeat_thread.start()
+        else:
+            try:
+                self._send_heartbeat()
+            except Exception:
+                pass
 
     def snapshot(self) -> HardwareSnapshot:
         with self._lock:
@@ -242,14 +301,19 @@ class Esp32Bridge:
     def close(self) -> None:
         self._stop.set()
         try:
-            self._transport.close()
+            with self._write_lock:
+                self._transport.close()
         finally:
-            self._thread.join(timeout=1)
+            self._reader_thread.join(timeout=1)
+            self._heartbeat_thread.join(timeout=1)
 
 
-def open_serial_bridge(port: str, baudrate: int = 115200) -> Esp32Bridge:
+def open_serial_bridge(port: str, baudrate: int = 115200, *, heartbeat_interval_s: float = 1.0) -> Esp32Bridge:
     try:
         import serial  # type: ignore
     except ImportError as exc:
         raise RuntimeError("hardware support requires optional dependency pyserial") from exc
-    return Esp32Bridge(serial.Serial(port=port, baudrate=baudrate, timeout=0.2, write_timeout=0.5))
+    return Esp32Bridge(
+        serial.Serial(port=port, baudrate=baudrate, timeout=0.2, write_timeout=0.5),
+        heartbeat_interval_s=heartbeat_interval_s,
+    )

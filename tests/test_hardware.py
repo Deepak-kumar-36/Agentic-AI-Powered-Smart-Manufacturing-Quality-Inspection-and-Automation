@@ -286,6 +286,127 @@ class HardwareBridgeTests(unittest.TestCase):
         disabled.send_decision("ins-1", "PASS")
         disabled.close()
 
+    def test_periodic_heartbeat_transmission_and_contract(self):
+        transport = FakeTransport()
+        # Fast heartbeat interval for test: 50ms
+        bridge = Esp32Bridge(transport, heartbeat_interval_s=0.05)
+        try:
+            # Wait for at least 3 heartbeats
+            time.sleep(0.18)
+            heartbeats = [
+                json.loads(w) for w in transport.writes
+                if b'"type":"heartbeat"' in w
+            ]
+            self.assertGreaterEqual(len(heartbeats), 2)
+            first = heartbeats[0]
+            self.assertEqual(first["schema_version"], 1)
+            self.assertEqual(first["type"], "heartbeat")
+            # Heartbeat must not contain disposition or decision fields
+            self.assertNotIn("decision", first)
+            self.assertNotIn("command_id", first)
+        finally:
+            bridge.close()
+
+    def test_startup_handshake_and_hello_message_compatibility(self):
+        transport = FakeTransport()
+        bridge = Esp32Bridge(transport)
+        try:
+            # Simulate firmware boot emitting hello
+            firmware_hello = json.dumps({
+                "schema_version": 1,
+                "type": "hello",
+                "firmware_version": "1.0.0",
+                "state": "READY",
+                "outcome": "UNVERIFIED",
+                "sensor_active": False,
+                "active": False,
+                "sensor_raw_active": False,
+                "sensor_sequence": 0,
+                "link_stale": False,
+                "uptime_ms": 10,
+            }) + "\n"
+            transport.reads.append(firmware_hello.encode())
+
+            deadline = time.time() + 1
+            while time.time() < deadline and bridge.snapshot().firmware_version is None:
+                time.sleep(0.01)
+
+            snap = bridge.snapshot()
+            self.assertEqual(snap.state, "connected")
+            self.assertEqual(snap.firmware_version, "1.0.0")
+            self.assertFalse(snap.sensor_active)
+            self.assertEqual(snap.indicator, "off")
+
+            # Simulate firmware controller.status response to heartbeat
+            controller_status = json.dumps({
+                "schema_version": 1,
+                "type": "controller.status",
+                "firmware_version": "1.0.0",
+                "state": "READY",
+                "outcome": "UNVERIFIED",
+                "sensor_active": True,
+                "active": True,
+                "sensor_raw_active": True,
+                "sensor_sequence": 1,
+                "link_stale": False,
+                "uptime_ms": 1200,
+            }) + "\n"
+            transport.reads.append(controller_status.encode())
+
+            deadline = time.time() + 1
+            while time.time() < deadline and not bridge.snapshot().sensor_active:
+                time.sleep(0.01)
+
+            updated = bridge.snapshot()
+            self.assertTrue(updated.sensor_active)
+            self.assertEqual(updated.firmware_version, "1.0.0")
+            self.assertEqual(updated.state, "connected")
+        finally:
+            bridge.close()
+
+    def test_heartbeat_write_failure_marks_disconnected(self):
+        transport = FakeTransport()
+        # Initialize bridge with fast interval
+        bridge = Esp32Bridge(transport, heartbeat_interval_s=0.03)
+        try:
+            time.sleep(0.05)
+            self.assertEqual(bridge.snapshot().state, "connected")
+
+            # Simulate transport failure on subsequent write
+            def failing_write(_data):
+                raise OSError("UART transmit error")
+
+            transport.write = failing_write
+            # Wait for next heartbeat attempt
+            deadline = time.time() + 1
+            while time.time() < deadline and bridge.snapshot().state != "disconnected":
+                time.sleep(0.01)
+
+            snap = bridge.snapshot()
+            self.assertEqual(snap.state, "disconnected")
+            self.assertEqual(snap.indicator, "off")
+            self.assertIn("UART transmit error", snap.last_error or "")
+        finally:
+            bridge.close()
+
+    def test_reconnect_resumes_heartbeat_transmission(self):
+        transport_1 = FakeTransport()
+        bridge = Esp32Bridge(transport_1, heartbeat_interval_s=0.05)
+        try:
+            time.sleep(0.08)
+            hb_count_1 = len([w for w in transport_1.writes if b'"type":"heartbeat"' in w])
+            self.assertGreaterEqual(hb_count_1, 1)
+
+            # Reconnect with new transport
+            transport_2 = FakeTransport()
+            bridge.reconnect(transport_2)
+
+            time.sleep(0.08)
+            hb_count_2 = len([w for w in transport_2.writes if b'"type":"heartbeat"' in w])
+            self.assertGreaterEqual(hb_count_2, 1)
+        finally:
+            bridge.close()
+
 
 if __name__ == "__main__":
     unittest.main()
