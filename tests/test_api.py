@@ -128,6 +128,7 @@ class InspectionApiTests(unittest.TestCase):
         status, disabled = self.api.handle("GET", "/api/v1/hardware/status")
         self.assertEqual(status, 200)
         self.assertEqual(disabled["state"], "disabled")
+        self.assertEqual(disabled["sensor_state"], "UNKNOWN")
         with tempfile.TemporaryDirectory() as directory:
             image = Path(directory) / "sample.png"
             from PIL import Image
@@ -141,6 +142,36 @@ class InspectionApiTests(unittest.TestCase):
                 self.assertEqual(api.handle("GET", "/api/v1/hardware/status")[1]["last_command_state"], "acknowledged")
             finally:
                 api.hardware.close()
+                api.store.close()
+
+    def test_sensor_status_uses_safe_operator_states_without_changing_inspections(self) -> None:
+        class SnapshotHardware:
+            def __init__(self, snapshot):
+                self._snapshot = snapshot
+
+            def snapshot(self):
+                return self._snapshot
+
+            def send_decision(self, *_args):
+                raise AssertionError("sensor telemetry must not send a decision")
+
+            def close(self):
+                return
+
+        cases = [
+            (HardwareSnapshot(True, "connected", None, None, None, None, "off", True, 1.0, "1.0.0"), "OBJECT_DETECTED"),
+            (HardwareSnapshot(True, "connected", None, None, None, None, "off", False, 1.0, "1.0.0"), "NO_OBJECT"),
+            (HardwareSnapshot(True, "connected", None, None, None, None, "off", None, None, "1.0.0"), "UNKNOWN"),
+            (HardwareSnapshot(True, "stale", "sensor data stale", None, None, None, "off", True, 1.0, "1.0.0"), "STALE"),
+            (HardwareSnapshot(True, "disconnected", "device removed", None, None, None, "off", True, 1.0, "1.0.0"), "DISCONNECTED"),
+        ]
+        for snapshot, expected in cases:
+            api = InspectionApi(InspectionStore(), hardware=SnapshotHardware(snapshot))
+            try:
+                status, payload = api.handle("GET", "/api/v1/hardware/sensor-status")
+                self.assertEqual(status, 200)
+                self.assertEqual(payload["sensor_state"], expected)
+            finally:
                 api.store.close()
 
     def test_duplicate_request_is_idempotent(self) -> None:

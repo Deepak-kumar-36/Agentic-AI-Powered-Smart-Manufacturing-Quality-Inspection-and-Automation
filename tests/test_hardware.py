@@ -39,6 +39,7 @@ class HardwareBridgeTests(unittest.TestCase):
         # Verify active-low IR sensor and input pullup configuration
         self.assertRegex(content, r"constexpr\s+uint8_t\s+IR_SENSOR_ACTIVE_LEVEL\s*=\s*LOW;")
         self.assertIn("pinMode(IR_SENSOR_GPIO, INPUT_PULLUP);", content)
+        self.assertIn("digitalRead(IR_SENSOR_GPIO) == IR_SENSOR_ACTIVE_LEVEL", content)
         self.assertIn("pinMode(RED_LED_GPIO, OUTPUT);", content)
         self.assertIn("pinMode(GREEN_LED_GPIO, OUTPUT);", content)
 
@@ -52,6 +53,28 @@ class HardwareBridgeTests(unittest.TestCase):
         self.assertIsNone(_bounded_json(b"x" * MAX_LINE_BYTES + b"\n"))
         self.assertIsNone(_bounded_json(b'{"schema_version":2,"type":"hello"}\n'))
         self.assertEqual(_bounded_json(b'{"schema_version":1,"type":"hello"}\n')["type"], "hello")
+
+    def test_valid_active_low_sensor_messages_update_presence_and_ignore_unsupported(self):
+        transport = FakeTransport()
+        bridge = Esp32Bridge(transport)
+        try:
+            bridge._accept({"schema_version": 1, "type": "sensor.state", "sensor_active": True, "sequence": 1})
+            self.assertTrue(bridge.snapshot().sensor_active)
+            bridge._accept({"schema_version": 1, "type": "sensor.state", "sensor_active": False, "sequence": 2})
+            self.assertFalse(bridge.snapshot().sensor_active)
+            before = bridge.snapshot()
+            writes_before = list(transport.writes)
+            bridge._accept({"schema_version": 1, "type": "sensor.state", "sensor_active": False, "sequence": 2})
+            self.assertFalse(bridge.snapshot().sensor_active)
+            self.assertEqual(transport.writes, writes_before)
+            bridge._accept({"schema_version": 1, "type": "sensor.motor.start", "sensor_active": True})
+            self.assertEqual(bridge.snapshot().last_decision, before.last_decision)
+            self.assertEqual(bridge.snapshot().indicator, "off")
+            bridge._accept({"schema_version": 1, "type": "sensor.state", "sensor_active": "LOW"})
+            bridge._accept({"schema_version": 1, "type": "sensor.state"})
+            self.assertFalse(bridge.snapshot().sensor_active)
+        finally:
+            bridge.close()
 
     def test_indicator_is_not_optimistically_updated_on_send(self):
         transport = FakeTransport()
@@ -250,6 +273,20 @@ class HardwareBridgeTests(unittest.TestCase):
         finally:
             bridge.close()
 
+    def test_disconnected_state_is_not_misreported_as_stale(self):
+        transport = FakeTransport()
+        bridge = Esp32Bridge(transport, stale_after_s=0.001)
+        try:
+            bridge._accept({"schema_version": 1, "type": "sensor.state", "sensor_active": True})
+            transport.readline = lambda: (_ for _ in ()).throw(OSError("device removed"))
+            deadline = time.time() + 1
+            while time.time() < deadline and bridge.snapshot().state != "disconnected":
+                time.sleep(0.01)
+            self.assertEqual(bridge.snapshot().state, "disconnected")
+            self.assertEqual(bridge.snapshot().indicator, "off")
+        finally:
+            bridge.close()
+
     def test_reconnect_handling(self):
         transport_1 = FakeTransport()
         bridge = Esp32Bridge(transport_1)
@@ -404,6 +441,40 @@ class HardwareBridgeTests(unittest.TestCase):
             time.sleep(0.08)
             hb_count_2 = len([w for w in transport_2.writes if b'"type":"heartbeat"' in w])
             self.assertGreaterEqual(hb_count_2, 1)
+        finally:
+            bridge.close()
+
+    def test_reconnect_factory_reopens_after_disconnect_without_parallel_readers(self):
+        transport_1 = FakeTransport()
+        transport_1.readline = lambda: (_ for _ in ()).throw(OSError("device removed"))
+        transport_2 = FakeTransport()
+        calls = []
+
+        def reconnect_factory():
+            calls.append(True)
+            return transport_2
+
+        bridge = Esp32Bridge(transport_1, reconnect_factory=reconnect_factory, reconnect_interval_s=0.01)
+        try:
+            deadline = time.time() + 1
+            while time.time() < deadline and not calls:
+                time.sleep(0.01)
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(bridge.snapshot().state, "connected")
+            self.assertTrue(transport_1.closed)
+        finally:
+            bridge.close()
+
+    def test_unverified_acknowledgment_confirms_safe_off_indicator(self):
+        transport = FakeTransport()
+        bridge = Esp32Bridge(transport)
+        try:
+            bridge.send_decision("ins-1", "UNVERIFIED")
+            command_id = json.loads(transport.writes[-1])["command_id"]
+            bridge._accept({"schema_version": 1, "type": "command.ack", "command_id": command_id, "ok": True})
+            snapshot = bridge.snapshot()
+            self.assertEqual(snapshot.last_command_state, "acknowledged")
+            self.assertEqual(snapshot.indicator, "off")
         finally:
             bridge.close()
 

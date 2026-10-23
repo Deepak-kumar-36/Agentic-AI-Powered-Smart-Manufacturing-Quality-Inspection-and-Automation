@@ -58,10 +58,10 @@ test('dashboard is a single scrollable workspace with bounded history controls a
   for (const route of ['new-inspection', 'history', 'model', 'dataset', 'health', 'settings']) {
     assert.doesNotMatch(html, new RegExp(`data-route="${route}"`));
   }
-  for (const id of ['dashboard-view', 'phone-camera', 'cameraUrl', 'cameraConfigureButton', 'cameraCaptureButton', 'cameraResult', 'reviewPanel', 'reviewOutcome', 'defectType', 'reviewNote', 'reviewSubmit', 'reviewHistory', 'reviewMetrics', 'reviewQueueBody', 'reviewAnalyticsOutcome', 'reviewAnalyticsState', 'reviewAnalyticsComparison', 'previewReviewExport', 'downloadReviewExport', 'reviewExportMessage', 'dataset', 'historySearch', 'historyCategory', 'historyOutcome']) {
+  for (const id of ['dashboard-view', 'phone-camera', 'cameraUrl', 'cameraConfigureButton', 'cameraCaptureButton', 'cameraResult', 'hardware', 'hardwareConnection', 'hardwareSensor', 'hardwareSensorTime', 'reviewPanel', 'reviewOutcome', 'defectType', 'reviewNote', 'reviewSubmit', 'reviewHistory', 'reviewMetrics', 'reviewQueueBody', 'reviewAnalyticsOutcome', 'reviewAnalyticsState', 'reviewAnalyticsComparison', 'previewReviewExport', 'downloadReviewExport', 'reviewExportMessage', 'dataset', 'historySearch', 'historyCategory', 'historyOutcome']) {
     assert.match(html, new RegExp(`id="${id}"`));
   }
-  for (const path of ['/health/ready', '/api/v1/system/status', '/api/v1/system/metadata', '/api/v1/inspections?limit=50', '/api/v1/images', '/api/v1/camera/status', '/api/v1/camera/configure', '/api/v1/camera/capture-inspection', '/api/v1/review-analytics', '/api/v1/review-export/preview', '/api/v1/review-export/download', '/reviews']) {
+  for (const path of ['/health/ready', '/api/v1/system/status', '/api/v1/system/metadata', '/api/v1/inspections?limit=50', '/api/v1/images', '/api/v1/camera/status', '/api/v1/camera/configure', '/api/v1/camera/capture-inspection', '/api/v1/hardware/status', '/api/v1/hardware/sensor-status', '/api/v1/review-analytics', '/api/v1/review-export/preview', '/api/v1/review-export/download', '/reviews']) {
     assert.match(html, new RegExp(path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
   assert.match(html, /does not fabricate dataset counts/);
@@ -76,6 +76,9 @@ test('dashboard is a single scrollable workspace with bounded history controls a
   assert.match(html, /Idempotency-Key/);
   assert.match(html, /Capturing and inspecting one fresh frame/);
   assert.match(html, /Camera configuration stays in memory/);
+  assert.match(html, /OBJECT_DETECTED/);
+  assert.match(html, /sensorState\.replaceAll\('_',' '\)/);
+  assert.match(html, /Object detected\. Capture an inspection explicitly when ready\./);
   assert.match(html, /Review is additive and never changes the AI decision/);
   assert.match(html, /Review saved. The AI decision was not changed/);
   assert.match(html, /escape\(review.note\)/);

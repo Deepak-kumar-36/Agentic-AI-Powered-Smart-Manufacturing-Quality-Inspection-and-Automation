@@ -84,7 +84,10 @@ the LEDs when malformed, unsupported, missing required fields, or oversized.
 
 ## Build and upload
 
-PlatformIO build configuration is in `platformio.ini` (`board = esp32doit-devkit-v1`, `framework = arduino`).
+PlatformIO builds `src/main.cpp` with `board = esp32dev` and `framework = arduino`.
+The Arduino CLI/IDE entry sketch is `esp32_indicator_sensor.ino`; it compiles
+the same `src/main.cpp` implementation. For the connected DOIT DevKit V1, use
+the Arduino FQBN `esp32:esp32:esp32doit-devkit-v1`.
 
 *Note:* When `pio` / `platformio` CLI is not installed locally, compilation remains **unverified** until compiled.
 
@@ -97,4 +100,11 @@ pio device monitor -d firmware/esp32_indicator_sensor --baud 115200
 ```
 
 Alternatively, open `firmware/esp32_indicator_sensor/src/main.cpp` in the Arduino IDE, select **ESP32 Dev Module** or **DOIT ESP32 DEVKIT V1**, and click **Upload**.
+
+Arduino CLI equivalents (upload is a manual operator step):
+
+```bash
+arduino-cli compile --fqbn esp32:esp32:esp32doit-devkit-v1 firmware/esp32_indicator_sensor
+arduino-cli upload --fqbn esp32:esp32:esp32doit-devkit-v1 --port /dev/ttyUSB0 firmware/esp32_indicator_sensor
+```
 

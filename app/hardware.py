@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import json
 from threading import Event, Lock, Thread
 import time
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 from uuid import uuid4
 
 from .structured_logging import logger
@@ -72,19 +72,30 @@ class Esp32Bridge:
         read_timeout_s: float = 0.2,
         stale_after_s: float = 5.0,
         heartbeat_interval_s: float = 1.0,
+        reconnect_factory: Callable[[], SerialTransport] | None = None,
+        reconnect_interval_s: float = 1.0,
     ) -> None:
         self._transport = transport
         self._read_timeout_s = read_timeout_s
         self._stale_after_s = stale_after_s
         self._heartbeat_interval_s = heartbeat_interval_s
+        self._reconnect_factory = reconnect_factory
+        self._reconnect_interval_s = reconnect_interval_s
         self._lock = Lock()
         self._write_lock = Lock()
         self._stop = Event()
         self._snapshot = HardwareSnapshot(True, "connected", None, None, None, None, "off", None, None, None)
-        self._reader_thread = Thread(target=self._reader, name="esp32-serial-reader", daemon=True)
+        self._reader_thread: Thread | None = None
         self._heartbeat_thread = Thread(target=self._heartbeat_worker, name="esp32-heartbeat", daemon=True)
-        self._reader_thread.start()
+        self._reconnect_thread = Thread(target=self._reconnect_worker, name="esp32-serial-reconnect", daemon=True)
+        self._start_reader(transport)
         self._heartbeat_thread.start()
+        if self._reconnect_factory is not None:
+            self._reconnect_thread.start()
+
+    def _start_reader(self, transport: SerialTransport) -> None:
+        self._reader_thread = Thread(target=self._reader, args=(transport,), name="esp32-serial-reader", daemon=True)
+        self._reader_thread.start()
 
     def _write_line(self, payload: dict[str, Any]) -> None:
         raw = _message(payload)
@@ -121,12 +132,14 @@ class Esp32Bridge:
                         old.firmware_version,
                     )
 
-    def _reader(self) -> None:
+    def _reader(self, transport: SerialTransport) -> None:
         while not self._stop.is_set():
             try:
-                raw = self._transport.readline()
+                raw = transport.readline()
             except Exception as exc:
                 with self._lock:
+                    if transport is not self._transport:
+                        return
                     old = self._snapshot
                     self._snapshot = HardwareSnapshot(
                         True, "disconnected", str(exc),
@@ -151,6 +164,25 @@ class Esp32Bridge:
                     )
                 continue
             self._accept(message)
+
+    def _reconnect_worker(self) -> None:
+        """Reopen only the configured serial device after a transport failure."""
+        while not self._stop.wait(self._reconnect_interval_s):
+            with self._lock:
+                should_reconnect = self._snapshot.state == "disconnected"
+            if not should_reconnect or self._reconnect_factory is None:
+                continue
+            try:
+                self.reconnect(self._reconnect_factory())
+                logger.info("hardware.reconnect.completed")
+            except Exception as exc:
+                with self._lock:
+                    old = self._snapshot
+                    self._snapshot = HardwareSnapshot(
+                        True, "disconnected", f"serial reconnect failed: {type(exc).__name__}",
+                        old.last_command_id, old.last_command_state, old.last_decision, "off",
+                        old.sensor_active, old.sensor_updated_at, old.firmware_version,
+                    )
 
     def _accept(self, message: dict[str, Any]) -> None:
         now = time.time()
@@ -227,10 +259,11 @@ class Esp32Bridge:
                     sensor_active = message.get("active")
                 s_active = sensor_active if isinstance(sensor_active, bool) else old.sensor_active
                 s_time = now if isinstance(sensor_active, bool) else old.sensor_updated_at
+                firmware_stale = message.get("state") == "STALE" or message.get("link_stale") is True
                 self._snapshot = HardwareSnapshot(
-                    True, "connected", old.last_error,
+                    True, "stale" if firmware_stale else "connected", "firmware link stale" if firmware_stale else old.last_error,
                     old.last_command_id, old.last_command_state, old.last_decision,
-                    old.indicator, s_active, s_time, fw,
+                    "off" if firmware_stale else old.indicator, s_active, s_time, fw,
                 )
 
     def send_decision(self, inspection_id: str, decision: str) -> None:
@@ -281,9 +314,7 @@ class Esp32Bridge:
             old_transport.close()
         except Exception:
             pass
-        if not self._reader_thread.is_alive():
-            self._reader_thread = Thread(target=self._reader, name="esp32-serial-reader", daemon=True)
-            self._reader_thread.start()
+        self._start_reader(new_transport)
         if not self._heartbeat_thread.is_alive():
             self._heartbeat_thread = Thread(target=self._heartbeat_worker, name="esp32-heartbeat", daemon=True)
             self._heartbeat_thread.start()
@@ -296,6 +327,14 @@ class Esp32Bridge:
     def snapshot(self) -> HardwareSnapshot:
         with self._lock:
             current = self._snapshot
+        if current.state == "disconnected":
+            return current
+        if current.state == "stale":
+            return HardwareSnapshot(
+                current.enabled, "stale", current.last_error or "sensor data stale",
+                current.last_command_id, current.last_command_state, current.last_decision,
+                "off", current.sensor_active, current.sensor_updated_at, current.firmware_version,
+            )
         if current.sensor_updated_at is not None and time.time() - current.sensor_updated_at > self._stale_after_s:
             return HardwareSnapshot(
                 current.enabled, "stale", "sensor data stale",
@@ -310,8 +349,12 @@ class Esp32Bridge:
             with self._write_lock:
                 self._transport.close()
         finally:
-            self._reader_thread.join(timeout=1)
-            self._heartbeat_thread.join(timeout=1)
+            if self._reader_thread is not None and self._reader_thread.is_alive():
+                self._reader_thread.join(timeout=1)
+            if self._heartbeat_thread.is_alive():
+                self._heartbeat_thread.join(timeout=1)
+            if self._reconnect_factory is not None and self._reconnect_thread.is_alive():
+                self._reconnect_thread.join(timeout=1)
 
 
 def open_serial_bridge(port: str, baudrate: int = 115200, *, heartbeat_interval_s: float = 1.0) -> Esp32Bridge:
@@ -319,7 +362,9 @@ def open_serial_bridge(port: str, baudrate: int = 115200, *, heartbeat_interval_
         import serial  # type: ignore
     except ImportError as exc:
         raise RuntimeError("hardware support requires optional dependency pyserial") from exc
-    return Esp32Bridge(
-        serial.Serial(port=port, baudrate=baudrate, timeout=0.2, write_timeout=0.5),
-        heartbeat_interval_s=heartbeat_interval_s,
-    )
+    def connect() -> SerialTransport:
+        # POSIX exclusive mode prevents another process from opening the same
+        # tty while the supervised bridge owns it.
+        return serial.Serial(port=port, baudrate=baudrate, timeout=0.2, write_timeout=0.5, exclusive=True)
+
+    return Esp32Bridge(connect(), heartbeat_interval_s=heartbeat_interval_s, reconnect_factory=connect)

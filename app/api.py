@@ -59,6 +59,19 @@ DEFECT_TYPES = frozenset({"scratch", "dent", "crack", "contamination", "misalign
 MAX_REVIEW_NOTE_LENGTH = 2000
 
 
+def _sensor_state(snapshot: Mapping[str, Any]) -> str:
+    """Translate bridge evidence to an operator-safe presence state."""
+    if snapshot.get("state") == "disconnected":
+        return "DISCONNECTED"
+    if snapshot.get("state") == "stale":
+        return "STALE"
+    if snapshot.get("sensor_active") is True:
+        return "OBJECT_DETECTED"
+    if snapshot.get("sensor_active") is False:
+        return "NO_OBJECT"
+    return "UNKNOWN"
+
+
 def _record_payload(record: InspectionRecord) -> dict[str, Any]:
     payload = asdict(record)
     payload["reason_codes"] = list(record.reason_codes)
@@ -146,8 +159,9 @@ class InspectionApi:
                 return 200, self._camera_status()
             if method == "GET" and route in {"/api/v1/hardware/status", "/api/v1/hardware/sensor-status"}:
                 snapshot = asdict(self.hardware.snapshot())
+                snapshot["sensor_state"] = _sensor_state(snapshot)
                 if route.endswith("sensor-status"):
-                    return 200, {key: snapshot[key] for key in ("enabled", "state", "sensor_active", "sensor_updated_at", "last_error")}
+                    return 200, {key: snapshot[key] for key in ("enabled", "state", "sensor_state", "sensor_active", "sensor_updated_at", "last_error")}
                 return 200, snapshot
             if method == "POST" and route == "/api/v1/camera/configure":
                 return self._configure_camera(body)
