@@ -167,6 +167,29 @@ never trust a benchmark dataset directory as inspection evidence. Historical
 rows with missing evidence or hashes remain excluded and must be re-inspected
 if their original evidence cannot be independently recovered.
 
+### Optional ESP32 hardware bridge
+
+Hardware is disabled unless a serial port is explicitly supplied. The bridge is
+indicator/sensor telemetry only and cannot control the conveyor motor:
+
+```bash
+python -m app.serve \
+  --metadata /path/to/run_metadata.json \
+  --artifacts /path/to/efficientad_s_artifacts \
+  --teacher /path/to/teacher_small.pth \
+  --image-root data/images \
+  --hardware-serial-port /dev/ttyUSB0 \
+  --hardware-baudrate 115200 \
+  --threshold bottle:0.2:0.8
+```
+
+Install the optional `pyserial` dependency to use the bridge. Without it, omit
+the hardware flags and the software-only API remains fully functional. The API
+exposes `GET /api/v1/hardware/status` and `GET /api/v1/hardware/sensor-status`.
+The firmware protocol is versioned JSON Lines, bounded to 1024-byte messages;
+only server-side final decisions are sent, and an unacknowledged command is
+never shown as delivered.
+
 The threshold values above are placeholders, not recommendations. The reviewed
 release loader rejects unqualified metadata, missing hashes, incompatible
 artifacts, and missing category thresholds.

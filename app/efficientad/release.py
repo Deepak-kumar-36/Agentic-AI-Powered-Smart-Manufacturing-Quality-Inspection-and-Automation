@@ -53,7 +53,7 @@ class ReviewedEfficientADRelease:
             "training_summary": _public_metadata(self.metadata.get("training_summary")),
         }
 
-    def create_api(self, *, device: str = "cpu", image_root: str | Path | None = None, evidence_roots: list[str | Path] | tuple[str | Path, ...] = (), store=None) -> InspectionApi:
+    def create_api(self, *, device: str = "cpu", image_root: str | Path | None = None, evidence_roots: list[str | Path] | tuple[str | Path, ...] = (), hardware=None, store=None) -> InspectionApi:
         runtime = NativeEfficientADRuntime(
             self.checkpoints, self.teacher_path, device=device,
             model_version=str(self.metadata.get("model_version", NativeEfficientADRuntime.MODEL_VERSION)),
@@ -65,6 +65,7 @@ class ReviewedEfficientADRelease:
             policies=self.policies,
             image_root=image_root,
             evidence_roots=evidence_roots,
+            hardware=hardware,
             metadata_provider=self.metadata_contract,
         )
 

@@ -27,6 +27,13 @@ class ServeCliTests(unittest.TestCase):
         ])
         self.assertEqual(args.db, Path("data/inspection.sqlite3"))
 
+    def test_hardware_is_explicitly_opt_in(self) -> None:
+        args = build_parser().parse_args([
+            "--metadata", "metadata.json", "--artifacts", "artifacts", "--teacher", "teacher.pth",
+            "--image-root", "images", "--threshold", "bottle:0.2:0.8",
+        ])
+        self.assertIsNone(args.hardware_serial_port)
+
 
 if __name__ == "__main__":
     unittest.main()

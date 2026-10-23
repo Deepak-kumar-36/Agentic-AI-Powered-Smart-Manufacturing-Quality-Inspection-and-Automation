@@ -554,6 +554,43 @@ The next request reloads the category and rechecks checkpoint metadata and the
 reference teacher hash. Cache invalidation is intentionally an in-process
 operation; it is not exposed as an unauthenticated HTTP endpoint.
 
+## Optional ESP32 indicators and IR telemetry
+
+The first hardware milestone is opt-in USB serial status indication only. The
+laptop remains the sole inference and policy authority. No motor, servo, PWM
+speed controller, or automatic sensor-triggered inspection is implemented.
+
+Build the Arduino-compatible firmware in `firmware/esp32_indicator_sensor/`
+with PlatformIO, then start the qualified server with an explicit serial port:
+
+```bash
+python -m app.serve \
+  --metadata /path/to/run_metadata.json \
+  --artifacts /path/to/efficientad_s_artifacts \
+  --teacher /path/to/teacher_small.pth \
+  --image-root data/images \
+  --hardware-serial-port /dev/ttyUSB0 \
+  --hardware-baudrate 115200 \
+  --threshold bottle:0.2:0.8
+```
+
+Omit `--hardware-serial-port` for normal software-only operation. The bridge
+uses bounded newline-delimited JSON with `schema_version: 1`; it sends the
+server-finalized `PASS`, `FAIL`, or `UNVERIFIED` decision and waits for an ESP32
+`command.ack`. Dashboard hardware status distinguishes sent/unconfirmed from
+acknowledged delivery and reports IR telemetry without triggering inspections.
+The exact protocol and pin defaults are documented in the firmware README.
+
+Prototype wiring matches tested breadboard connections: red FAIL LED GPIO5
+(D5), green PASS LED GPIO4 (D4), and IR digital input GPIO23 (D23) configured
+with internal pullup (`INPUT_PULLUP`, active LOW). Use one series resistor per LED,
+USB power for the ESP32, common ground with the sensor, and 3.3 V logic only.
+The bridge sends a unique `command_id` with each disposition and correlates
+matching `command.ack` responses before updating confirmed indicator states;
+older or mismatched acknowledgments are ignored and sending never marks a
+command optimistically acknowledged. Keep the 9 V battery and manual motor PWM
+speed controller electrically separate from ESP32 logic and power.
+
 ## Kaggle EfficientAD-S experiments
 
 The Kaggle entry point is `notebooks/efficientad_s_kaggle.ipynb`. It expects

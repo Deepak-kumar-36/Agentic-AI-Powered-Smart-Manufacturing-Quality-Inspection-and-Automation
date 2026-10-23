@@ -8,6 +8,7 @@ from pathlib import Path
 from .api import serve_api
 from .efficientad.release import load_reviewed_release
 from .persistence import InspectionStore
+from .hardware import open_serial_bridge
 
 
 def parse_threshold(value: str) -> tuple[str, tuple[float, float]]:
@@ -34,6 +35,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--db", type=Path, default=Path("data/inspection.sqlite3"), help="durable SQLite database path")
     parser.add_argument("--threshold", action="append", type=parse_threshold, required=True, help="category:pass:fail; repeat per category")
     parser.add_argument("--device", default="cpu", choices=("cpu", "cuda"))
+    parser.add_argument("--hardware-serial-port", type=str, default=None, help="opt-in ESP32 serial port")
+    parser.add_argument("--hardware-baudrate", type=int, default=115200)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
     return parser
@@ -44,7 +47,8 @@ def main(argv: list[str] | None = None) -> int:
     thresholds = dict(args.threshold)
     release = load_reviewed_release(args.metadata, args.artifacts, args.teacher, thresholds)
     args.db.parent.mkdir(parents=True, exist_ok=True)
-    api = release.create_api(device=args.device, image_root=args.image_root, evidence_roots=args.evidence_root, store=InspectionStore(args.db))
+    hardware = open_serial_bridge(args.hardware_serial_port, args.hardware_baudrate) if args.hardware_serial_port else None
+    api = release.create_api(device=args.device, image_root=args.image_root, evidence_roots=args.evidence_root, hardware=hardware, store=InspectionStore(args.db))
     serve_api(api, host=args.host, port=args.port)
     return 0
 

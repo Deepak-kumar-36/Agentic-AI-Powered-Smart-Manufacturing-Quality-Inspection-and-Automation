@@ -25,6 +25,8 @@ Legend: `[x]` verified complete, `[~]` implemented or partially evidenced, `[ ]`
 - [x] Persist inspections transactionally in SQLite.
 - [x] Persist validated input-image hashes and managed evidence references for new upload and phone-camera inspections.
 - [x] Verify the synthetic inspection → review → ZIP export → validation → safe staging workflow.
+- [x] Add opt-in ESP32 indicator/IR telemetry bridge with software-only fallback and deterministic protocol tests.
+- [ ] Compile and physically test the ESP32 firmware against the exact board and sensor modules.
 - [x] Persist immutable inspection events.
 - [x] Enforce idempotency keys and request-hash conflict detection.
 - [x] Verify persistence read-back and idempotency behavior with tests.
@@ -108,11 +110,11 @@ Legend: `[x]` verified complete, `[~]` implemented or partially evidenced, `[ ]`
 ## 8. ESP32, machine actions, and safety
 
 - [x] Keep actuation disabled by default in the current software slice.
-- [ ] Decide the ESP32 board, motor, driver, servo, sensors, and exact wiring.
-- [ ] Implement a bounded, versioned, idempotent host-side protocol simulator.
-- [ ] Implement ACK versus completion semantics.
-- [ ] Add duplicate, malformed, timeout, disconnect, and physical-stop tests.
-- [ ] Add firmware source/build and hardware-in-the-loop evidence.
+- [x] Align ESP32 firmware GPIO pin assignments with physical breadboard wiring (Red: GPIO5/D5, Green: GPIO4/D4, IR: GPIO23/D23 with `INPUT_PULLUP`).
+- [x] Implement bounded, versioned serial protocol with strict `command_id` correlation in `command.ack`.
+- [x] Enforce delivery confirmation semantics: no optimistic indicator setting on send; older/mismatched ACKs ignored; indicator updates only upon verified matching ACK.
+- [x] Add malformed, oversized, wrong-version, heartbeat-timeout, disconnect, reconnect, and write-failure tests for hardware bridge.
+- [ ] Compile and physically test the ESP32 firmware against the exact board and sensor modules (compilation unverified in current environment: PlatformIO CLI absent).
 - [ ] Do not enable actuation before Gate C supervised evidence.
 
 ## 9. Observability, performance, and reliability

@@ -30,6 +30,7 @@ from .persistence import InspectionRecord, InspectionStore
 from .review_export import MAX_EXPORT_BYTES, MAX_EXPORT_RECORDS, build as build_review_export, collect as collect_review_export
 from .camera import CameraError, FramePolicy, FreshFrameSelector, MjpegCameraSource, redact_camera_url, validate_camera_url
 from .policy import DecisionPolicy, InspectionInput, ModelEvidence, reason_values
+from .hardware import DisabledHardware
 
 
 class ImageScorer(Protocol):
@@ -90,6 +91,7 @@ class InspectionApi:
         evidence_roots: list[str | Path] | tuple[str | Path, ...] = (),
         metadata_provider: MetadataProvider | None = None,
         camera_source_factory: Any | None = None,
+        hardware: Any | None = None,
     ) -> None:
         self.store = store or InspectionStore()
         self.model = model
@@ -102,6 +104,7 @@ class InspectionApi:
         self._camera_source: Any | None = None
         self._camera_url: str | None = None
         self._camera_selector = FreshFrameSelector(FramePolicy(max_age_ms=1000))
+        self.hardware = hardware or DisabledHardware()
 
     def reload_model(self, category: str | None = None) -> list[str]:
         """Invalidate the injected model cache after reviewed artifact replacement."""
@@ -123,6 +126,11 @@ class InspectionApi:
                 return 200, {"mode": "software_only", "actuation_enabled": False, "model": "ready" if self.model else "not_ready", "camera": self._camera_state(), "database": "ready"}
             if method == "GET" and route == "/api/v1/camera/status":
                 return 200, self._camera_status()
+            if method == "GET" and route in {"/api/v1/hardware/status", "/api/v1/hardware/sensor-status"}:
+                snapshot = asdict(self.hardware.snapshot())
+                if route.endswith("sensor-status"):
+                    return 200, {key: snapshot[key] for key in ("enabled", "state", "sensor_active", "sensor_updated_at", "last_error")}
+                return 200, snapshot
             if method == "POST" and route == "/api/v1/camera/configure":
                 return self._configure_camera(body)
             if method == "POST" and route == "/api/v1/camera/capture-inspection":
@@ -310,6 +318,7 @@ class InspectionApi:
                 raw = image_buffer.getvalue()
                 self._atomic_store(image_path, raw)
                 record = self._decide(record.inspection_id, {"category": request["category"], "image_path": image_path.name}, evidence_extra=self._image_evidence(raw, image_path.name))
+                self.hardware.send_decision(record.inspection_id, record.outcome or "UNVERIFIED")
             except (CameraError, ValueError):
                 record = self.store.record_decision(record.inspection_id, outcome="UNVERIFIED", reason_codes=["CAMERA_FRAME_INVALID"], policy_version="policy-unverified", model_version=None, score=None)
             except OSError:
@@ -338,6 +347,7 @@ class InspectionApi:
         if record.outcome is None:
             evidence = self._image_evidence(image[1], payload.get("image_path")) if image is not None else None
             record = self._decide(record.inspection_id, payload, evidence_extra=evidence)
+            self.hardware.send_decision(record.inspection_id, record.outcome or "UNVERIFIED")
         return 201, _record_payload(record)
 
     def _upload_image(self, body: bytes) -> tuple[int, dict[str, Any]]:
@@ -551,8 +561,9 @@ def serve(
     image_root: str | Path | None = None,
     evidence_roots: list[str | Path] | tuple[str | Path, ...] = (),
     metadata_provider: MetadataProvider | None = None,
+    hardware: Any | None = None,
 ) -> None:
-    api = InspectionApi(store, model=model, policies=policies, image_root=image_root, evidence_roots=evidence_roots, metadata_provider=metadata_provider)
+    api = InspectionApi(store, model=model, policies=policies, image_root=image_root, evidence_roots=evidence_roots, metadata_provider=metadata_provider, hardware=hardware)
     serve_api(api, host=host, port=port)
 
 
@@ -563,6 +574,7 @@ def serve_api(api: InspectionApi, *, host: str = "127.0.0.1", port: int = 8000) 
         server.serve_forever()
     finally:
         server.server_close()
+        api.hardware.close()
         api.store.close()
 
 

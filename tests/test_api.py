@@ -10,6 +10,7 @@ import numpy as np
 from app.api import InspectionApi
 from app.persistence import InspectionStore
 from app.policy import DecisionPolicy
+from app.hardware import HardwareSnapshot
 
 
 class FakeEvidence:
@@ -50,6 +51,21 @@ class FakeCamera:
 
     def close(self) -> None:
         self.opened = False
+
+
+class FakeHardware:
+    def __init__(self):
+        self.decisions = []
+        self.closed = False
+
+    def send_decision(self, inspection_id, decision):
+        self.decisions.append((inspection_id, decision))
+
+    def snapshot(self):
+        return HardwareSnapshot(True, "connected", None, "cmd-1", "acknowledged", "PASS", "green", False, 1.0, "test")
+
+    def close(self):
+        self.closed = True
 
 
 class InspectionApiTests(unittest.TestCase):
@@ -106,6 +122,25 @@ class InspectionApiTests(unittest.TestCase):
         self.assertEqual(record["outcome"], "UNVERIFIED")
         self.assertEqual(record["reason_codes"], ["MODEL_NOT_READY"])
         self.assertEqual(self.api.handle("GET", f"/api/v1/inspections/{record['inspection_id']}")[1]["outcome"], "UNVERIFIED")
+
+    def test_hardware_is_disabled_by_default_and_receives_final_server_decision(self) -> None:
+        status, disabled = self.api.handle("GET", "/api/v1/hardware/status")
+        self.assertEqual(status, 200)
+        self.assertEqual(disabled["state"], "disabled")
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "sample.png"
+            from PIL import Image
+            Image.new("RGB", (2, 2), (1, 2, 3)).save(image)
+            hardware = FakeHardware()
+            api = InspectionApi(InspectionStore(), model=FakeModel(0.1), policies={"bottle": DecisionPolicy("p", frozenset({"efficientad-s-native-v1"}), 0.2, 0.8)}, image_root=directory, hardware=hardware)
+            try:
+                _, record = api.handle("POST", "/api/v1/inspections", json.dumps({"category": "bottle", "image_path": "sample.png", "outcome": "FAIL", "score": 99}).encode(), {"Idempotency-Key": "hardware-decision"})
+                self.assertEqual(record["outcome"], "PASS")
+                self.assertEqual(hardware.decisions, [(record["inspection_id"], "PASS")])
+                self.assertEqual(api.handle("GET", "/api/v1/hardware/status")[1]["last_command_state"], "acknowledged")
+            finally:
+                api.hardware.close()
+                api.store.close()
 
     def test_duplicate_request_is_idempotent(self) -> None:
         body = json.dumps({"category": "bottle"}).encode()
