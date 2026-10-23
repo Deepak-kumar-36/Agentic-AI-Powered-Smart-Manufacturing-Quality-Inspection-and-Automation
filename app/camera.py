@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from io import BytesIO
+from email.message import Message
 import os
 import ipaddress
 import select
@@ -313,16 +314,49 @@ class MjpegCameraSource:
         self._sequence = 0
         self._frames_read = 0
         self._last_error: str | None = None
+        self._response_status: int | None = None
+        self._content_type: str | None = None
 
     def open(self) -> None:
         if self._response is not None:
             return
         request = Request(self.url, headers={"User-Agent": "manufacturing-inspection/0.1"})
         try:
-            self._response = _NO_REDIRECT_OPENER.open(request, timeout=5)
+            response = _NO_REDIRECT_OPENER.open(request, timeout=5)
+            status = response.getcode() if callable(getattr(response, "getcode", None)) else getattr(response, "status", None)
+            content_type = str(response.headers.get("Content-Type", "")).strip()
+            parsed_type = Message()
+            parsed_type["content-type"] = content_type
+            media_type = parsed_type.get_content_type().lower()
+            boundary = parsed_type.get_param("boundary")
+            content_length = response.headers.get("Content-Length")
+            if status is None or not 200 <= int(status) < 300:
+                raise CameraError(f"phone camera returned HTTP status {status}")
+            if media_type != "multipart/x-mixed-replace" or not isinstance(boundary, str) or not boundary.strip():
+                raise CameraError(f"phone camera response is not multipart MJPEG (media type: {media_type or 'missing'})")
+            if content_length is not None:
+                raise CameraError("phone camera returned a finite response with Content-Length")
+            self._response_status = int(status)
+            self._content_type = media_type
+            self._last_error = None
+            self._response = response
+        except CameraError as exc:
+            if "response" in locals():
+                response.close()
+            self._last_error = str(exc)
+            raise
         except OSError as exc:
             self._last_error = str(exc)
             raise CameraError(f"unable to open phone camera stream: {exc}") from exc
+
+    def _discard_response(self) -> None:
+        response, self._response = self._response, None
+        self._buffer.clear()
+        if response is not None:
+            try:
+                response.close()
+            except OSError:
+                pass
 
     def read(self, timeout_ms: int) -> CameraFrame | None:
         if timeout_ms < 1:
@@ -335,14 +369,31 @@ class MjpegCameraSource:
         # urllib's socket timeout is set per read so a disconnected phone cannot
         # leave the capture worker blocked indefinitely.
         try:
-            response.fp.raw._sock.settimeout(timeout_ms / 1000)  # type: ignore[union-attr]
+            file_pointer = getattr(response, "fp", None)
+            raw_stream = getattr(file_pointer, "raw", None)
+            sock = getattr(raw_stream, "_sock", None)
+            if sock is None or not callable(getattr(sock, "settimeout", None)):
+                self._last_error = "phone camera response does not expose a timeout-capable stream"
+                self._discard_response()
+                return None
+            sock.settimeout(timeout_ms / 1000)
             while True:
                 jpeg = extract_jpeg(self._buffer)
                 if jpeg is not None:
                     break
-                chunk = response.read(self.chunk_size)
+                # An MJPEG body never reaches EOF. HTTPResponse.read(n) may
+                # wait until n bytes have arrived, even when the buffer already
+                # contains one or more complete, smaller JPEG frames. read1()
+                # returns currently available bytes from the streaming socket.
+                read_chunk = getattr(response, "read1", None)
+                chunk = (read_chunk if callable(read_chunk) else response.read)(self.chunk_size)
                 if not chunk:
                     self._last_error = "phone camera stream ended"
+                    # HTTPResponse.read1() closes its file pointer at EOF but
+                    # the HTTPResponse object remains referenced. Drop it so
+                    # the next explicit capture reconnects instead of trying
+                    # to access response.fp.raw on a closed response.
+                    self._discard_response()
                     return None
                 self._buffer.extend(chunk)
                 if len(self._buffer) > self.max_buffer_bytes:
@@ -350,6 +401,7 @@ class MjpegCameraSource:
                     return None
         except (OSError, TimeoutError) as exc:
             self._last_error = f"phone camera read failed: {exc}"
+            self._discard_response()
             return None
         try:
             from PIL import Image
@@ -380,6 +432,8 @@ class MjpegCameraSource:
             "open": self._response is not None,
             "frames_read": self._frames_read,
             "last_error": self._last_error,
+            "http_status": self._response_status,
+            "content_type": self._content_type,
         }
 
     def close(self) -> None:

@@ -14,6 +14,7 @@ import json
 import hashlib
 import os
 import tempfile
+import traceback
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -347,7 +348,13 @@ class InspectionApi:
                 self._camera_source.close()
             self._camera_source, self._camera_url = source, url
             self._camera_selector.reset()
-        logger.info("camera.configured", url=url)
+        health = source.health()
+        logger.info(
+            "camera.configured",
+            url=url,
+            http_status=health.get("http_status") if isinstance(health, Mapping) else None,
+            content_type=health.get("content_type") if isinstance(health, Mapping) else None,
+        )
         return 200, self._camera_status()
 
     def _capture_inspection(self, body: bytes, headers: dict[str, str]) -> tuple[int, dict[str, Any]]:
@@ -377,7 +384,10 @@ class InspectionApi:
             try:
                 frame = source.read(5000)
                 if frame is None:
-                    raise CameraError("camera frame unavailable")
+                    health_method = getattr(source, "health", None)
+                    health = health_method() if callable(health_method) else None
+                    source_error = health.get("last_error") if isinstance(health, Mapping) else None
+                    raise CameraError(source_error or "camera frame unavailable")
                 accepted = self._camera_selector.accept(frame, now=datetime.now(timezone.utc))
                 if self.image_root is None:
                     raise CameraError("image root is not configured")
@@ -387,14 +397,26 @@ class InspectionApi:
                 raw = image_buffer.getvalue()
                 self._atomic_store(image_path, raw)
                 logger.info("camera.capture.completed", inspection_id=record.inspection_id, image_bytes=len(raw), image_sha256=hashlib.sha256(raw).hexdigest())
-                record = self._decide(record.inspection_id, {"category": request["category"], "image_path": image_path.name}, evidence_extra=self._image_evidence(raw, image_path.name))
-                self.hardware.send_decision(record.inspection_id, record.outcome or "UNVERIFIED")
             except (CameraError, ValueError) as exc:
                 logger.warning("camera.capture.failed", inspection_id=record.inspection_id, error=str(exc))
                 record = self.store.record_decision(record.inspection_id, outcome="UNVERIFIED", reason_codes=["CAMERA_FRAME_INVALID"], policy_version="policy-unverified", model_version=None, score=None)
+                return 200, _record_payload(record)
             except OSError as exc:
                 logger.error("camera.capture.failed", inspection_id=record.inspection_id, error=str(exc))
                 record = self.store.record_decision(record.inspection_id, outcome="UNVERIFIED", reason_codes=["EVIDENCE_STORAGE_FAILED"], policy_version="policy-unverified", model_version=None, score=None)
+                return 200, _record_payload(record)
+            except Exception as exc:
+                frames = traceback.extract_tb(exc.__traceback__)
+                logger.error(
+                    "camera.capture.failed",
+                    inspection_id=record.inspection_id,
+                    error_type=type(exc).__name__,
+                    traceback=[{"file": Path(frame.filename).name, "line": frame.lineno, "function": frame.name, "source": frame.line} for frame in frames],
+                )
+                record = self.store.record_decision(record.inspection_id, outcome="UNVERIFIED", reason_codes=["CAMERA_CAPTURE_FAILED"], policy_version="policy-unverified", model_version=None, score=None)
+                return 200, _record_payload(record)
+            record = self._decide(record.inspection_id, {"category": request["category"], "image_path": image_path.name}, evidence_extra=self._image_evidence(raw, image_path.name))
+            self.hardware.send_decision(record.inspection_id, record.outcome or "UNVERIFIED")
         return 200, _record_payload(record)
 
     def _create(self, body: bytes, headers: dict[str, str]) -> tuple[int, dict[str, Any]]:

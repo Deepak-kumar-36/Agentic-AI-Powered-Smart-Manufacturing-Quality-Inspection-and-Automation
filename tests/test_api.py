@@ -11,6 +11,7 @@ from app.api import InspectionApi
 from app.persistence import InspectionStore
 from app.policy import DecisionPolicy
 from app.hardware import HardwareSnapshot
+from app.structured_logging import capture_logs
 
 
 class FakeEvidence:
@@ -332,6 +333,87 @@ class InspectionApiTests(unittest.TestCase):
                 self.assertEqual([event["event_type"] for event in events], ["inspection.created", "inspection.decision_recorded"])
                 duplicate = api.handle("POST", "/api/v1/camera/capture-inspection", json.dumps({"category": "bottle"}).encode(), {"Idempotency-Key": "camera-one"})[1]
                 self.assertEqual(duplicate["inspection_id"], record["inspection_id"])
+            finally:
+                api.store.close()
+
+    def test_phone_camera_unavailable_frame_is_fail_closed_with_adapter_error(self) -> None:
+        class TimedOutCamera(FakeCamera):
+            def health(self):
+                return {"camera_id": "fake", "open": True, "last_error": "phone camera read timed out"}
+
+        with tempfile.TemporaryDirectory() as directory:
+            api = InspectionApi(
+                InspectionStore(),
+                model=FakeModel(0.1),
+                policies={"bottle": DecisionPolicy("policy-1", frozenset({"efficientad-s-native-v1"}), 0.2, 0.8)},
+                image_root=directory,
+                camera_source_factory=lambda _url: TimedOutCamera(None),
+            )
+            try:
+                api.handle("POST", "/api/v1/camera/configure", json.dumps({"url": "http://127.0.0.1:8080/video"}).encode())
+                status, record = api.handle(
+                    "POST", "/api/v1/camera/capture-inspection", json.dumps({"category": "bottle"}).encode(),
+                    {"Idempotency-Key": "camera-timeout"},
+                )
+                self.assertEqual(status, 200)
+                self.assertEqual(record["outcome"], "UNVERIFIED")
+                self.assertEqual(record["reason_codes"], ["CAMERA_FRAME_INVALID"])
+                self.assertIsNone(record["model_version"])
+                self.assertEqual(record["evidence"], {})
+                self.assertEqual(list(Path(directory).glob("phone-camera-*.png")), [])
+                events = api.store.events(record["inspection_id"])
+                self.assertEqual(events[-1]["payload"]["reason_codes"], ["CAMERA_FRAME_INVALID"])
+            finally:
+                api.store.close()
+
+    def test_phone_camera_missing_health_details_does_not_raise_attribute_error(self) -> None:
+        class HealthlessCamera(FakeCamera):
+            def __init__(self, frame):
+                super().__init__(frame)
+                self.health_calls = 0
+
+            def health(self):
+                self.health_calls += 1
+                if self.health_calls > 2:
+                    return None
+                return super().health()
+
+        api = InspectionApi(InspectionStore(), camera_source_factory=lambda _url: HealthlessCamera(None))
+        try:
+            api.handle("POST", "/api/v1/camera/configure", json.dumps({"url": "http://127.0.0.1:8080/video"}).encode())
+            status, record = api.handle(
+                "POST", "/api/v1/camera/capture-inspection", json.dumps({"category": "bottle"}).encode(),
+                {"Idempotency-Key": "camera-empty-health"},
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual(record["outcome"], "UNVERIFIED")
+            self.assertEqual(record["reason_codes"], ["CAMERA_FRAME_INVALID"])
+        finally:
+            api.store.close()
+
+    def test_phone_camera_attribute_error_is_logged_with_frames_and_persisted_unverified(self) -> None:
+        class BrokenCamera(FakeCamera):
+            def read(self, _timeout_ms):
+                detail = "test adapter " + "attribute missing"
+                raise AttributeError(detail)
+
+        with tempfile.TemporaryDirectory() as directory:
+            api = InspectionApi(InspectionStore(), image_root=directory, camera_source_factory=lambda _url: BrokenCamera(None))
+            try:
+                api.handle("POST", "/api/v1/camera/configure", json.dumps({"url": "http://127.0.0.1:8080/video"}).encode())
+                with capture_logs() as logs:
+                    status, record = api.handle(
+                        "POST", "/api/v1/camera/capture-inspection", json.dumps({"category": "bottle"}).encode(),
+                        {"Idempotency-Key": "camera-attribute-error"},
+                    )
+                self.assertEqual(status, 200)
+                self.assertEqual(record["outcome"], "UNVERIFIED")
+                self.assertEqual(record["reason_codes"], ["CAMERA_CAPTURE_FAILED"])
+                failure = next(event for event in logs if event["event"] == "camera.capture.failed")
+                self.assertEqual(failure["error_type"], "AttributeError")
+                self.assertTrue(failure["traceback"])
+                self.assertNotIn("test adapter attribute missing", json.dumps(failure))
+                self.assertEqual(api.store.get(record["inspection_id"]).outcome, "UNVERIFIED")
             finally:
                 api.store.close()
 
