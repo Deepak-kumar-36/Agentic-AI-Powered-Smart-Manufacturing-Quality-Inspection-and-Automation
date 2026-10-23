@@ -404,6 +404,32 @@ audit for cross-split leakage yet; missing grouping metadata means leakage
 identifiers. No physical-sample IDs, sessions, defect labels, or ground truth are
 invented. Duplicate checks are within this package, not across other datasets.
 
+### Database backup, verification, and disaster recovery
+
+Create consistent online SQLite snapshots (WAL and rollback-safe), bundle referenced evidence assets, verify checksums and integrity, and drill clean-location restores:
+
+```bash
+# Create a verified backup snapshot
+python -m app.backup create --db data/inspection.sqlite3 --backup-root backups/ --evidence-root data/images
+
+# Verify checksums and database integrity of an existing backup
+python -m app.backup verify --backup-dir backups/bkp_YYYYMMDD_HHMMSS_xxxx/
+
+# Restore into a separate, clean target directory (drills and recovery)
+python -m app.backup restore \
+  --backup-dir backups/bkp_YYYYMMDD_HHMMSS_xxxx/ \
+  --target-db data/restored/inspection.sqlite3 \
+  --target-evidence-root data/restored/images/
+```
+
+### Structured production logging and observability
+
+The API and CLI tools emit single-line structured JSON events with ISO timestamps, service metadata, boot identity, correlation IDs, and automated credential/image-data redaction following Document 14 and Document 12:
+
+- **Request correlation**: `X-Request-ID` and `X-Correlation-ID` headers are propagated through context variables across inference, persistence, and hardware bridge operations and returned on HTTP responses.
+- **Lifecycle events**: `api.request.started`, `api.request.completed`, `api.request.failed`, `inspection.created`, `inspection.inference.started`, `inspection.inference.completed`, `inspection.decision.created`, `operator.review.created`, `camera.configured`, `backup.created`, `backup.verified`, and `backup.restore.completed`.
+- **Automated redaction**: Prohibited secrets, passwords, auth tokens, camera URL credentials, and raw image/base64 payloads are automatically scrubbed by `StructuredLogger`.
+
 Run the API and static dashboard in separate terminals:
 
 ```bash
@@ -413,6 +439,7 @@ python -c 'from app.api import serve; serve()'
 # Terminal 2: static browser server
 python -m http.server 4173 --directory dashboard
 ```
+
 
 Open <http://127.0.0.1:4173/>. To use another API origin, open
 `http://127.0.0.1:4173/?api=http://127.0.0.1:8000` (the default is already

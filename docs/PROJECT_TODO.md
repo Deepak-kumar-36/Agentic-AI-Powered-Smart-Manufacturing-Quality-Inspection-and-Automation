@@ -130,11 +130,11 @@ Legend: `[x]` verified complete, `[~]` implemented or partially evidenced, `[ ]`
 ## 10. Backup, disaster recovery, and continuity
 
 - [x] Document 16 is now present in the workspace and available for review.
-- [ ] Define the authoritative backup set: code, database, model release, policy, preprocessing, configuration, and firmware.
-- [ ] Implement local backup creation with consistent manifests.
-- [ ] Test clean-location restore.
+- [x] Define the authoritative backup set: code, database, model release, policy, preprocessing, configuration, and firmware.
+- [x] Implement local backup creation with consistent manifests.
+- [x] Test clean-location restore.
 - [ ] Test corrupted/missing model artifact recovery.
-- [ ] Test database restore and event-history integrity.
+- [x] Test database restore and event-history integrity.
 - [ ] Define RPO/RTO targets and retention policy.
 - [ ] Verify recovery never resumes motion without supervised reconciliation.
 
