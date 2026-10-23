@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from .structured_logging import logger
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -128,6 +130,7 @@ class InspectionStore:
             columns = {row[1] for row in self.connection.execute("PRAGMA table_info(inspections)")}
             if "evidence_json" not in columns:
                 self.connection.execute("ALTER TABLE inspections ADD COLUMN evidence_json TEXT NOT NULL DEFAULT '{}'")
+        logger.debug("persistence.migrated")
 
     def create(self, idempotency_key: str, payload: dict[str, Any]) -> InspectionRecord:
         with self._lock:
@@ -296,10 +299,14 @@ class InspectionStore:
             return ReviewAnalytics(total, reviewed, total - reviewed, round(reviewed / total * 100, 2) if total else 0.0, sum(row["review_count"] for row in rows), distribution, agreement, disagreement, comparable, conflicts, unverified, attention, filtered[start:start + page_size], page, page_size, len(filtered))
 
     def _event(self, inspection_id: str, event_type: str, payload: dict[str, Any]) -> None:
-        self.connection.execute(
-            "INSERT INTO inspection_events (inspection_id, event_type, payload, created_at) VALUES (?, ?, ?, ?)",
-            (inspection_id, event_type, json.dumps(payload, sort_keys=True), _now()),
-        )
+        try:
+            self.connection.execute(
+                "INSERT INTO inspection_events (inspection_id, event_type, payload, created_at) VALUES (?, ?, ?, ?)",
+                (inspection_id, event_type, json.dumps(payload, sort_keys=True), _now()),
+            )
+        except Exception as exc:
+            logger.error("inspection.persist.failed", inspection_id=inspection_id, event_type=event_type, error=str(exc))
+            raise
 
     @staticmethod
     def _record(row: sqlite3.Row) -> InspectionRecord:

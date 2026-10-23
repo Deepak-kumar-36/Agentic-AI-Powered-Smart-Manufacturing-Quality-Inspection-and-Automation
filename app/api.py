@@ -25,12 +25,15 @@ from threading import RLock
 
 from PIL import Image
 import numpy as np
+import time
 
 from .persistence import InspectionRecord, InspectionStore
 from .review_export import MAX_EXPORT_BYTES, MAX_EXPORT_RECORDS, build as build_review_export, collect as collect_review_export
 from .camera import CameraError, FramePolicy, FreshFrameSelector, MjpegCameraSource, redact_camera_url, validate_camera_url
 from .policy import DecisionPolicy, InspectionInput, ModelEvidence, reason_values
 from .hardware import DisabledHardware
+from .structured_logging import correlation_context, get_request_id, get_correlation_id, logger, set_inspection_id
+
 
 
 class ImageScorer(Protocol):
@@ -111,12 +114,23 @@ class InspectionApi:
         reload_fn = getattr(self.model, "reload", None)
         if not callable(reload_fn):
             raise RuntimeError("configured model does not support reload")
-        return sorted(reload_fn(category))
+        reloaded = sorted(reload_fn(category))
+        logger.info("model.cache.reloaded", category=category, reloaded=reloaded)
+        return reloaded
 
     def handle(self, method: str, path: str, body: bytes = b"", headers: dict[str, str] | None = None) -> tuple[int, dict[str, Any]]:
         headers = {key.lower(): value for key, value in (headers or {}).items()}
         parsed = urlsplit(path)
         route = parsed.path.rstrip("/") or "/"
+        active_req_id = get_request_id()
+        req_id = active_req_id or headers.get("x-request-id") or f"req_{uuid4().hex[:12]}"
+        corr_id = get_correlation_id() or headers.get("x-correlation-id") or req_id
+        if active_req_id is None:
+            with correlation_context(request_id=req_id, correlation_id=corr_id):
+                return self._handle_routed(method, route, parsed.query, body, headers)
+        return self._handle_routed(method, route, parsed.query, body, headers)
+
+    def _handle_routed(self, method: str, route: str, query: str, body: bytes, headers: dict[str, str]) -> tuple[int, dict[str, Any]]:
         try:
             if method == "GET" and route == "/health/live":
                 return 200, {"status": "ok", "service": "inspection-api"}
@@ -138,13 +152,13 @@ class InspectionApi:
             if method == "GET" and route == "/api/v1/system/metadata":
                 return self._metadata()
             if method == "GET" and route == "/api/v1/review-analytics":
-                return self._review_analytics(parsed.query)
+                return self._review_analytics(query)
             if method == "GET" and route == "/api/v1/review-export/preview":
-                return self._review_export_preview(parsed.query)
+                return self._review_export_preview(query)
             if method == "POST" and route == "/api/v1/images":
                 return self._upload_image(body)
             if method == "GET" and route == "/api/v1/inspections":
-                limit = int(parse_qs(parsed.query).get("limit", [50])[0])
+                limit = int(parse_qs(query).get("limit", [50])[0])
                 return 200, {"items": [_record_payload(item) for item in self.store.list(limit)]}
             if method == "POST" and route == "/api/v1/inspections":
                 return self._create(body, headers)
@@ -153,6 +167,7 @@ class InspectionApi:
                 if len(segments) == 5 and segments[-1] == "events":
                     raise ApiError(404, "NOT_FOUND", "inspection was not found")
                 inspection_id = segments[4]
+                set_inspection_id(inspection_id)
                 if method == "GET" and len(segments) == 6 and segments[5] == "reviews":
                     return 200, {"items": [asdict(review) for review in self.store.reviews(inspection_id)]}
                 if method == "GET" and len(segments) == 6 and segments[5] == "events":
@@ -167,6 +182,7 @@ class InspectionApi:
             raise ApiError(404, "INSPECTION_NOT_FOUND", str(exc.args[0])) from exc
         except (ValueError, json.JSONDecodeError) as exc:
             raise ApiError(400, "INVALID_REQUEST", str(exc)) from exc
+
 
     def _metadata(self) -> tuple[int, dict[str, Any]]:
         if self.metadata_provider is None:
@@ -247,6 +263,7 @@ class InspectionApi:
             raise ApiError(400, "INVALID_REVIEW_NOTE", f"note must be text of at most {MAX_REVIEW_NOTE_LENGTH} characters")
         try:
             review = self.store.add_review(inspection_id, outcome=outcome, defect_type=defect_type, note=note.strip() if isinstance(note, str) and note.strip() else None)
+            logger.info("operator.review.created", inspection_id=inspection_id, review_id=review.review_id, outcome=outcome, defect_type=defect_type)
         except KeyError as exc:
             raise ApiError(404, "INSPECTION_NOT_FOUND", str(exc.args[0])) from exc
         return 201, asdict(review)
@@ -276,12 +293,14 @@ class InspectionApi:
         except Exception as exc:
             if "source" in locals():
                 source.close()
+            logger.warning("camera.configure.failed", url=url, error=str(exc))
             raise ApiError(502, "CAMERA_UNAVAILABLE", "phone camera stream could not be opened") from exc
         with self._camera_lock:
             if self._camera_source is not None:
                 self._camera_source.close()
             self._camera_source, self._camera_url = source, url
             self._camera_selector.reset()
+        logger.info("camera.configured", url=url)
         return 200, self._camera_status()
 
     def _capture_inspection(self, body: bytes, headers: dict[str, str]) -> tuple[int, dict[str, Any]]:
@@ -297,13 +316,16 @@ class InspectionApi:
         if not idempotency_key:
             raise ApiError(400, "IDEMPOTENCY_KEY_REQUIRED", "Idempotency-Key header is required")
         request = {"category": payload["category"].strip(), "source": "phone-camera"}
+        logger.info("camera.capture.started", category=request["category"], idempotency_key=idempotency_key)
         record = self.store.create(idempotency_key, request)
+        set_inspection_id(record.inspection_id)
         if record.outcome is not None:
             return 200, _record_payload(record)
         with self._camera_lock:
             source = self._camera_source
             if source is None:
                 record = self.store.record_decision(record.inspection_id, outcome="UNVERIFIED", reason_codes=["CAMERA_NOT_CONFIGURED"], policy_version="policy-unverified", model_version=None, score=None)
+                logger.warning("camera.capture.failed", inspection_id=record.inspection_id, reason="CAMERA_NOT_CONFIGURED")
                 return 200, _record_payload(record)
             try:
                 frame = source.read(5000)
@@ -317,11 +339,14 @@ class InspectionApi:
                 Image.fromarray(accepted.frame, mode="RGB").save(image_buffer, format="PNG")
                 raw = image_buffer.getvalue()
                 self._atomic_store(image_path, raw)
+                logger.info("camera.capture.completed", inspection_id=record.inspection_id, image_bytes=len(raw), image_sha256=hashlib.sha256(raw).hexdigest())
                 record = self._decide(record.inspection_id, {"category": request["category"], "image_path": image_path.name}, evidence_extra=self._image_evidence(raw, image_path.name))
                 self.hardware.send_decision(record.inspection_id, record.outcome or "UNVERIFIED")
-            except (CameraError, ValueError):
+            except (CameraError, ValueError) as exc:
+                logger.warning("camera.capture.failed", inspection_id=record.inspection_id, error=str(exc))
                 record = self.store.record_decision(record.inspection_id, outcome="UNVERIFIED", reason_codes=["CAMERA_FRAME_INVALID"], policy_version="policy-unverified", model_version=None, score=None)
-            except OSError:
+            except OSError as exc:
+                logger.error("camera.capture.failed", inspection_id=record.inspection_id, error=str(exc))
                 record = self.store.record_decision(record.inspection_id, outcome="UNVERIFIED", reason_codes=["EVIDENCE_STORAGE_FAILED"], policy_version="policy-unverified", model_version=None, score=None)
         return 200, _record_payload(record)
 
@@ -344,11 +369,14 @@ class InspectionApi:
         if image is not None:
             payload["image_sha256"] = hashlib.sha256(image[1]).hexdigest()
         record = self.store.create(idempotency_key, payload)
+        set_inspection_id(record.inspection_id)
+        logger.info("inspection.created", inspection_id=record.inspection_id, category=payload.get("category"), idempotency_key=idempotency_key)
         if record.outcome is None:
             evidence = self._image_evidence(image[1], payload.get("image_path")) if image is not None else None
             record = self._decide(record.inspection_id, payload, evidence_extra=evidence)
             self.hardware.send_decision(record.inspection_id, record.outcome or "UNVERIFIED")
         return 201, _record_payload(record)
+
 
     def _upload_image(self, body: bytes) -> tuple[int, dict[str, Any]]:
         if self.image_root is None:
@@ -378,40 +406,63 @@ class InspectionApi:
         return 201, {"image_path": stored_name, "bytes": len(raw), "image_sha256": hashlib.sha256(raw).hexdigest()}
 
     def _decide(self, inspection_id: str, payload: dict[str, Any], *, evidence_extra: dict[str, Any] | None = None) -> InspectionRecord:
+        set_inspection_id(inspection_id)
         category = payload["category"].strip()
         evidence_payload: dict[str, Any] = dict(evidence_extra or {})
         image_value = payload.get("image_path")
         image = self._image_bytes(image_value) if image_value is not None else None
         if image_value is not None and image is None:
-            return self.store.record_decision(
+            rec = self.store.record_decision(
                 inspection_id, outcome="UNVERIFIED", reason_codes=["IMAGE_INVALID"],
                 policy_version=self.policies.get(category).version if category in self.policies else "policy-unverified",
                 model_version=None, score=None, evidence=evidence_payload,
             )
+            logger.info("inspection.decision.created", inspection_id=inspection_id, outcome="UNVERIFIED", reason_codes=["IMAGE_INVALID"])
+            return rec
         if self.model is None:
-            return self.store.record_decision(
+            rec = self.store.record_decision(
                 inspection_id, outcome="UNVERIFIED", reason_codes=["MODEL_NOT_READY"],
                 policy_version="policy-unverified", model_version=None, score=None, evidence=evidence_payload,
             )
+            logger.info("inspection.decision.created", inspection_id=inspection_id, outcome="UNVERIFIED", reason_codes=["MODEL_NOT_READY"])
+            return rec
         policy = self.policies.get(category)
         if policy is None:
-            return self.store.record_decision(
+            rec = self.store.record_decision(
                 inspection_id, outcome="UNVERIFIED", reason_codes=["UNSUPPORTED_CATEGORY"],
                 policy_version="policy-unverified", model_version=None, score=None, evidence=evidence_payload,
             )
+            logger.info("inspection.decision.created", inspection_id=inspection_id, outcome="UNVERIFIED", reason_codes=["UNSUPPORTED_CATEGORY"])
+            return rec
         image_path = image[0] if image is not None else None
         if image_path is None:
-            return self.store.record_decision(
+            rec = self.store.record_decision(
                 inspection_id, outcome="UNVERIFIED", reason_codes=["IMAGE_INVALID"],
                 policy_version=policy.version, model_version=None, score=None, evidence=evidence_payload,
             )
+            logger.info("inspection.decision.created", inspection_id=inspection_id, outcome="UNVERIFIED", reason_codes=["IMAGE_INVALID"])
+            return rec
+        logger.debug("inspection.inference.started", category=category)
+        t0 = time.monotonic()
         try:
             evidence = self.model.score(category, image_path)
-        except Exception:
-            return self.store.record_decision(
+            duration_ms = round((time.monotonic() - t0) * 1000, 2)
+            logger.info(
+                "inspection.inference.completed",
+                category=category,
+                score=getattr(evidence, "score", None),
+                model_version=getattr(evidence, "model_version", None),
+                duration_ms=duration_ms,
+            )
+        except Exception as exc:
+            duration_ms = round((time.monotonic() - t0) * 1000, 2)
+            logger.error("inspection.inference.failed", category=category, error=str(exc), duration_ms=duration_ms)
+            rec = self.store.record_decision(
                 inspection_id, outcome="UNVERIFIED", reason_codes=["MODEL_NOT_READY"],
                 policy_version=policy.version, model_version=None, score=None, evidence=evidence_payload,
             )
+            logger.info("inspection.decision.created", inspection_id=inspection_id, outcome="UNVERIFIED", reason_codes=["MODEL_NOT_READY"])
+            return rec
         decision = policy.evaluate(
             InspectionInput(valid=True),
             ModelEvidence(model_version=evidence.model_version, score=evidence.score),
@@ -427,7 +478,7 @@ class InspectionApi:
                 image_buffer = BytesIO()
                 Image.fromarray(np.uint8(np.clip(normalized, 0, 1) * 255), mode="L").save(image_buffer, format="PNG")
                 evidence_payload["heatmap_url"] = "data:image/png;base64," + base64.b64encode(image_buffer.getvalue()).decode("ascii")
-        return self.store.record_decision(
+        rec = self.store.record_decision(
             inspection_id,
             outcome=decision.outcome.value,
             reason_codes=reason_values(decision.reason_codes),
@@ -436,6 +487,17 @@ class InspectionApi:
             score=decision.score,
             evidence=evidence_payload,
         )
+        logger.info(
+            "inspection.decision.created",
+            inspection_id=inspection_id,
+            outcome=decision.outcome.value,
+            score=decision.score,
+            reason_codes=reason_values(decision.reason_codes),
+            policy_version=decision.policy_version,
+            model_version=decision.model_version,
+        )
+        return rec
+
 
     def _image_path(self, value: Any) -> Path | None:
         if not isinstance(value, str) or not value.strip():
@@ -494,7 +556,7 @@ class InspectionApi:
 class _Handler(BaseHTTPRequestHandler):
     api: InspectionApi
 
-    def _respond(self, status: int, payload: dict[str, Any]) -> None:
+    def _respond(self, status: int, payload: dict[str, Any], request_id: str | None = None, correlation_id: str | None = None) -> None:
         encoded = json.dumps(payload, sort_keys=True).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
@@ -502,17 +564,29 @@ class _Handler(BaseHTTPRequestHandler):
         # server during development. Keep the API browser-callable without
         # changing its routes or trusting any client-side decision fields.
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Idempotency-Key")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Idempotency-Key, X-Request-ID, X-Correlation-ID")
+        self.send_header("Access-Control-Expose-Headers", "Content-Disposition, X-Request-ID, X-Correlation-ID")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        if request_id:
+            self.send_header("X-Request-ID", request_id)
+        if correlation_id:
+            self.send_header("X-Correlation-ID", correlation_id)
         self.send_header("Content-Length", str(len(encoded)))
         self.end_headers()
         self.wfile.write(encoded)
 
-    def _respond_download(self, archive: bytes, filename: str) -> None:
+    def _respond_download(self, archive: bytes, filename: str, request_id: str | None = None, correlation_id: str | None = None) -> None:
         self.send_response(200)
         self.send_header("Content-Type", "application/zip")
         self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
         self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Idempotency-Key, X-Request-ID, X-Correlation-ID")
+        self.send_header("Access-Control-Expose-Headers", "Content-Disposition, X-Request-ID, X-Correlation-ID")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        if request_id:
+            self.send_header("X-Request-ID", request_id)
+        if correlation_id:
+            self.send_header("X-Correlation-ID", correlation_id)
         self.send_header("Content-Length", str(len(archive)))
         self.end_headers()
         self.wfile.write(archive)
@@ -520,19 +594,31 @@ class _Handler(BaseHTTPRequestHandler):
     def _dispatch(self, method: str) -> None:
         length = int(self.headers.get("Content-Length", "0"))
         body = self.rfile.read(length) if length else b""
-        try:
-            if method == "GET" and urlsplit(self.path).path.rstrip("/") == "/api/v1/review-export/download":
-                archive, filename, _summary = self.api.export_download(self.path)
-                self._respond_download(archive, filename)
-                return
-            status, payload = self.api.handle(method, self.path, body, dict(self.headers.items()))
-        except ApiError as exc:
-            status, payload = exc.status, {"error": {"code": exc.code, "message": exc.message}}
-        except Exception:
-            # Keep browser clients on a JSON response even when a legacy local
-            # database or another server-side dependency fails unexpectedly.
-            status, payload = 500, {"error": {"code": "INTERNAL_ERROR", "message": "the inspection API could not complete the request"}}
-        self._respond(status, payload)
+        req_id = self.headers.get("X-Request-ID") or f"req_{uuid4().hex[:12]}"
+        corr_id = self.headers.get("X-Correlation-ID") or req_id
+        start_time = time.monotonic()
+        headers_dict = dict(self.headers.items())
+        with correlation_context(request_id=req_id, correlation_id=corr_id):
+            logger.info("api.request.started", method=method, path=self.path)
+            try:
+                if method == "GET" and urlsplit(self.path).path.rstrip("/") == "/api/v1/review-export/download":
+                    archive, filename, _summary = self.api.export_download(self.path)
+                    duration_ms = round((time.monotonic() - start_time) * 1000, 2)
+                    logger.info("api.request.completed", method=method, path=self.path, status=200, duration_ms=duration_ms)
+                    self._respond_download(archive, filename, request_id=req_id, correlation_id=corr_id)
+                    return
+                status, payload = self.api.handle(method, self.path, body, headers_dict)
+                duration_ms = round((time.monotonic() - start_time) * 1000, 2)
+                logger.info("api.request.completed", method=method, path=self.path, status=status, duration_ms=duration_ms)
+            except ApiError as exc:
+                duration_ms = round((time.monotonic() - start_time) * 1000, 2)
+                logger.warning("api.request.failed", method=method, path=self.path, status=exc.status, code=exc.code, message=exc.message, duration_ms=duration_ms)
+                status, payload = exc.status, {"error": {"code": exc.code, "message": exc.message}}
+            except Exception as exc:
+                duration_ms = round((time.monotonic() - start_time) * 1000, 2)
+                logger.error("api.request.failed", method=method, path=self.path, status=500, code="INTERNAL_ERROR", error_type=type(exc).__name__, duration_ms=duration_ms)
+                status, payload = 500, {"error": {"code": "INTERNAL_ERROR", "message": "the inspection API could not complete the request"}}
+            self._respond(status, payload, request_id=req_id, correlation_id=corr_id)
 
     def do_GET(self) -> None:  # noqa: N802
         self._dispatch("GET")
@@ -543,7 +629,8 @@ class _Handler(BaseHTTPRequestHandler):
     def do_OPTIONS(self) -> None:  # noqa: N802
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Idempotency-Key")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Idempotency-Key, X-Request-ID, X-Correlation-ID")
+        self.send_header("Access-Control-Expose-Headers", "Content-Disposition, X-Request-ID, X-Correlation-ID")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.end_headers()
 
@@ -570,12 +657,15 @@ def serve(
 def serve_api(api: InspectionApi, *, host: str = "127.0.0.1", port: int = 8000) -> None:
     """Serve an already configured API instance."""
     server = create_server(api, host=host, port=port)
+    logger.info("api.startup", host=host, port=port)
     try:
         server.serve_forever()
     finally:
+        logger.info("api.shutdown", host=host, port=port)
         server.server_close()
         api.hardware.close()
         api.store.close()
+
 
 
 def create_server(api: InspectionApi, *, host: str = "127.0.0.1", port: int = 8000) -> ThreadingHTTPServer:

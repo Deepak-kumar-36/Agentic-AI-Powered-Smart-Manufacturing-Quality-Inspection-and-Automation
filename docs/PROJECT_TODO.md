@@ -45,7 +45,7 @@ Legend: `[x]` verified complete, `[~]` implemented or partially evidenced, `[ ]`
 - [x] Add offline stored-image capture-to-decision workflow with restart tests.
 - [x] Add model cache reuse across requests.
 - [x] Add explicit per-category/all-category model cache reload.
-- [ ] Add structured production logging and correlation IDs.
+- [x] Add structured production logging and correlation IDs.
 - [ ] Add request authentication/authorization if LAN or multi-user access is approved.
 - [ ] Add durable API process/service packaging beyond the test-oriented Docker command.
 
@@ -119,7 +119,7 @@ Legend: `[x]` verified complete, `[~]` implemented or partially evidenced, `[ ]`
 
 ## 9. Observability, performance, and reliability
 
-- [ ] Implement structured logs with redaction and correlation fields.
+- [x] Implement structured logs with redaction and correlation fields.
 - [ ] Add low-cardinality metrics for capture, inference, decisions, persistence, and actions.
 - [x] Record model inference latency in the Kaggle evaluation output.
 - [ ] Add full-cycle latency measurements from capture through durable decision.

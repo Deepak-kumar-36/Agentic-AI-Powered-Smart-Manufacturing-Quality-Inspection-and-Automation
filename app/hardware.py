@@ -9,6 +9,8 @@ import time
 from typing import Any, Protocol
 from uuid import uuid4
 
+from .structured_logging import logger
+
 
 PROTOCOL_VERSION = 1
 MAX_LINE_BYTES = 1024
@@ -181,6 +183,7 @@ class Esp32Bridge:
                         cmd_id, "acknowledged", old.last_decision,
                         confirmed_indicator, old.sensor_active, old.sensor_updated_at, old.firmware_version,
                     )
+                    logger.info("hardware.command.ack_received", command_id=cmd_id, status="accepted", indicator=confirmed_indicator)
                 else:
                     err = str(message.get("error_code") or message.get("status") or "command rejected")
                     self._snapshot = HardwareSnapshot(
@@ -188,6 +191,7 @@ class Esp32Bridge:
                         cmd_id, "rejected", old.last_decision,
                         "off", old.sensor_active, old.sensor_updated_at, old.firmware_version,
                     )
+                    logger.warning("hardware.command.ack_received", command_id=cmd_id, status="rejected", error=err)
 
             elif kind == "error":
                 cmd_id = message.get("command_id")
@@ -248,6 +252,7 @@ class Esp32Bridge:
                     command_id, "write_failed", decision,
                     "off", old.sensor_active, old.sensor_updated_at, old.firmware_version,
                 )
+            logger.warning("hardware.command.write_failed", inspection_id=inspection_id, command_id=command_id, error=str(exc))
             return
         with self._lock:
             old = self._snapshot
@@ -257,6 +262,7 @@ class Esp32Bridge:
                 command_id, "sent_unconfirmed", decision,
                 old.indicator, old.sensor_active, old.sensor_updated_at, old.firmware_version,
             )
+        logger.info("hardware.command.sent", inspection_id=inspection_id, outcome=decision, command_id=command_id)
 
     def reconnect(self, new_transport: SerialTransport) -> None:
         """Safely attach a new transport upon reconnection."""
