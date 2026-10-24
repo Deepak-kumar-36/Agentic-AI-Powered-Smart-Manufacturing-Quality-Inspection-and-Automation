@@ -76,6 +76,19 @@ class HardwareBridgeTests(unittest.TestCase):
         finally:
             bridge.close()
 
+    def test_sensor_listener_receives_only_validated_sensor_telemetry(self):
+        transport = FakeTransport()
+        received = []
+        bridge = Esp32Bridge(transport, sensor_listener=received.append)
+        try:
+            bridge._accept({"schema_version": 1, "type": "sensor.state", "sensor_active": False})
+            bridge._accept({"schema_version": 1, "type": "sensor.state", "sensor_active": True})
+            bridge._accept({"schema_version": 1, "type": "sensor.state", "sensor_active": "LOW"})
+            bridge._accept({"schema_version": 1, "type": "sensor.motor.start", "sensor_active": True})
+            self.assertEqual([item.sensor_active for item in received], [False, True])
+        finally:
+            bridge.close()
+
     def test_indicator_is_not_optimistically_updated_on_send(self):
         transport = FakeTransport()
         bridge = Esp32Bridge(transport)

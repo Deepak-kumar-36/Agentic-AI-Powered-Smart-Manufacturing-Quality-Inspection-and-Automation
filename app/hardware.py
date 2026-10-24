@@ -74,6 +74,7 @@ class Esp32Bridge:
         heartbeat_interval_s: float = 1.0,
         reconnect_factory: Callable[[], SerialTransport] | None = None,
         reconnect_interval_s: float = 1.0,
+        sensor_listener: Callable[[HardwareSnapshot], None] | None = None,
     ) -> None:
         self._transport = transport
         self._read_timeout_s = read_timeout_s
@@ -81,6 +82,7 @@ class Esp32Bridge:
         self._heartbeat_interval_s = heartbeat_interval_s
         self._reconnect_factory = reconnect_factory
         self._reconnect_interval_s = reconnect_interval_s
+        self._sensor_listener = sensor_listener
         self._lock = Lock()
         self._write_lock = Lock()
         self._stop = Event()
@@ -96,6 +98,21 @@ class Esp32Bridge:
     def _start_reader(self, transport: SerialTransport) -> None:
         self._reader_thread = Thread(target=self._reader, args=(transport,), name="esp32-serial-reader", daemon=True)
         self._reader_thread.start()
+
+    def set_sensor_listener(self, listener: Callable[[HardwareSnapshot], None] | None) -> None:
+        """Register the one backend consumer of validated sensor telemetry."""
+        with self._lock:
+            self._sensor_listener = listener
+
+    def _notify_sensor_listener(self) -> None:
+        with self._lock:
+            listener = self._sensor_listener
+        if listener is None:
+            return
+        try:
+            listener(self.snapshot())
+        except Exception as exc:
+            logger.error("hardware.sensor_listener.failed", error_type=type(exc).__name__)
 
     def _write_line(self, payload: dict[str, Any]) -> None:
         raw = _message(payload)
@@ -131,6 +148,7 @@ class Esp32Bridge:
                         old.sensor_active, old.sensor_updated_at,
                         old.firmware_version,
                     )
+                self._notify_sensor_listener()
 
     def _reader(self, transport: SerialTransport) -> None:
         while not self._stop.is_set():
@@ -148,6 +166,7 @@ class Esp32Bridge:
                         old.sensor_active, old.sensor_updated_at,
                         old.firmware_version,
                     )
+                self._notify_sensor_listener()
                 return
             if not raw:
                 continue
@@ -187,6 +206,7 @@ class Esp32Bridge:
     def _accept(self, message: dict[str, Any]) -> None:
         now = time.time()
         kind = message.get("type")
+        notify_sensor_listener = False
         with self._lock:
             old = self._snapshot
             if kind == "command.ack":
@@ -251,6 +271,7 @@ class Esp32Bridge:
                         old.last_command_id, old.last_command_state, old.last_decision,
                         old.indicator, sensor_active, now, old.firmware_version,
                     )
+                    notify_sensor_listener = True
 
             elif kind in {"hello", "controller.status"}:
                 fw = str(message.get("firmware_version") or old.firmware_version or "unknown")
@@ -265,6 +286,9 @@ class Esp32Bridge:
                     old.last_command_id, old.last_command_state, old.last_decision,
                     "off" if firmware_stale else old.indicator, s_active, s_time, fw,
                 )
+                notify_sensor_listener = isinstance(sensor_active, bool)
+        if notify_sensor_listener:
+            self._notify_sensor_listener()
 
     def send_decision(self, inspection_id: str, decision: str) -> None:
         if decision not in VALID_DECISIONS:

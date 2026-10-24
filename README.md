@@ -583,9 +583,8 @@ operation; it is not exposed as an unauthenticated HTTP endpoint.
 
 ## Optional ESP32 indicators and IR telemetry
 
-The first hardware milestone is opt-in USB serial status indication only. The
-laptop remains the sole inference and policy authority. No motor, servo, PWM
-speed controller, or automatic sensor-triggered inspection is implemented.
+The laptop remains the sole inference and policy authority. No motor, servo,
+PWM speed controller, relay, or direct sensor-to-decision path is implemented.
 
 Build the Arduino-compatible firmware in `firmware/esp32_indicator_sensor/`
 with PlatformIO, then start the qualified server with an explicit serial port:
@@ -605,8 +604,30 @@ Omit `--hardware-serial-port` for normal software-only operation. The bridge
 uses bounded newline-delimited JSON with `schema_version: 1`; it sends the
 server-finalized `PASS`, `FAIL`, or `UNVERIFIED` decision and waits for an ESP32
 `command.ack`. Dashboard hardware status distinguishes sent/unconfirmed from
-acknowledged delivery and reports IR telemetry without triggering inspections.
+acknowledged delivery and reports IR telemetry; inspection triggering remains
+disabled unless the explicit supervised option below is enabled.
 The exact protocol and pin defaults are documented in the firmware README.
+
+### Supervised IR-triggered capture (experimental)
+
+Automatic capture is disabled by default. For supervised local testing only,
+set both variables before starting the backend:
+
+```bash
+export AUTO_CAPTURE_ON_IR=true
+export AUTO_CAPTURE_CATEGORY=bottle
+```
+
+`AUTO_CAPTURE_CATEGORY` must exactly match one qualified `--threshold`
+category. The backend requires fresh connected ESP32 telemetry and a ready
+phone-camera stream, then captures only once after a stable `NO_OBJECT` to
+`OBJECT_DETECTED` transition. It re-arms only after the sensor clears.
+Repeated telemetry, startup object presence, stale/disconnected hardware, an
+unavailable camera, and unavailable inspection prerequisites do not create a
+capture. The same managed-evidence, inference, persistence, and deterministic
+policy pipeline used by manual capture is reused. Gemini remains advisory-only;
+the sensor never directly chooses `PASS` or `FAIL`, and motor control remains
+absent.
 
 Prototype wiring matches tested breadboard connections: red FAIL LED GPIO5
 (D5), green PASS LED GPIO4 (D4), and IR digital input GPIO23 (D23) configured

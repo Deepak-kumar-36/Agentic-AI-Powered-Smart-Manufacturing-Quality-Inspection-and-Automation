@@ -33,6 +33,7 @@ from .review_export import MAX_EXPORT_BYTES, MAX_EXPORT_RECORDS, build as build_
 from .camera import CameraError, FramePolicy, FreshFrameSelector, MjpegCameraSource, redact_camera_url, validate_camera_url
 from .policy import DecisionPolicy, InspectionInput, ModelEvidence, reason_values
 from .hardware import DisabledHardware
+from .auto_capture import IrAutoCaptureController
 from .structured_logging import correlation_context, get_request_id, get_correlation_id, logger, set_inspection_id
 from .vision_assessment import VisionAssessmentService, VisionError
 
@@ -111,6 +112,8 @@ class InspectionApi:
         camera_source_factory: Any | None = None,
         hardware: Any | None = None,
         vision_assessment: VisionAssessmentService | None = None,
+        auto_capture_on_ir: bool = False,
+        auto_capture_category: str | None = None,
     ) -> None:
         self.store = store or InspectionStore()
         self.model = model
@@ -125,6 +128,21 @@ class InspectionApi:
         self._camera_selector = FreshFrameSelector(FramePolicy(max_age_ms=1000))
         self.hardware = hardware or DisabledHardware()
         self.vision_assessment = vision_assessment or VisionAssessmentService()
+        self._auto_capture: IrAutoCaptureController | None = None
+        if auto_capture_on_ir:
+            category = (auto_capture_category or "").strip()
+            if not category or category not in self.policies:
+                raise ValueError("AUTO_CAPTURE_CATEGORY must name a configured inspection category")
+            register_listener = getattr(self.hardware, "set_sensor_listener", None)
+            if not callable(register_listener):
+                raise ValueError("AUTO_CAPTURE_ON_IR requires the ESP32 hardware bridge")
+            self._auto_capture = IrAutoCaptureController(
+                category=category,
+                capture=self._run_ir_auto_capture,
+                snapshot=self.hardware.snapshot,
+            )
+            register_listener(self._auto_capture.on_sensor_snapshot)
+            logger.info("auto_capture.enabled", category=category)
 
     def reload_model(self, category: str | None = None) -> list[str]:
         """Invalidate the injected model cache after reviewed artifact replacement."""
@@ -160,8 +178,10 @@ class InspectionApi:
             if method == "GET" and route in {"/api/v1/hardware/status", "/api/v1/hardware/sensor-status"}:
                 snapshot = asdict(self.hardware.snapshot())
                 snapshot["sensor_state"] = _sensor_state(snapshot)
+                snapshot["auto_capture_on_ir"] = self._auto_capture is not None
+                snapshot["auto_capture_category"] = self._auto_capture.category if self._auto_capture is not None else None
                 if route.endswith("sensor-status"):
-                    return 200, {key: snapshot[key] for key in ("enabled", "state", "sensor_state", "sensor_active", "sensor_updated_at", "last_error")}
+                    return 200, {key: snapshot[key] for key in ("enabled", "state", "sensor_state", "sensor_active", "sensor_updated_at", "last_error", "auto_capture_on_ir", "auto_capture_category")}
                 return 200, snapshot
             if method == "POST" and route == "/api/v1/camera/configure":
                 return self._configure_camera(body)
@@ -432,6 +452,37 @@ class InspectionApi:
             record = self._decide(record.inspection_id, {"category": request["category"], "image_path": image_path.name}, evidence_extra=self._image_evidence(raw, image_path.name))
             self.hardware.send_decision(record.inspection_id, record.outcome or "UNVERIFIED")
         return 200, _record_payload(record)
+
+    def _auto_capture_ready(self, category: str) -> bool:
+        snapshot = self.hardware.snapshot()
+        sensor_fresh = (
+            snapshot.state == "connected"
+            and snapshot.sensor_active is True
+            and isinstance(snapshot.sensor_updated_at, (int, float))
+            and 0 <= time.time() - snapshot.sensor_updated_at <= 2.0
+        )
+        if not sensor_fresh or self.model is None or category not in self.policies or self.image_root is None:
+            return False
+        status = self._camera_status()
+        return status.get("status") == "ready"
+
+    def _run_ir_auto_capture(self, category: str) -> None:
+        """Use the exact manual camera path after sensor/camera preflight."""
+        if not self._auto_capture_ready(category):
+            logger.warning("auto_capture.skipped", reason="PREREQUISITE_UNAVAILABLE", category=category)
+            return
+        try:
+            _status, record = self._capture_inspection(
+                json.dumps({"category": category}).encode("utf-8"),
+                {"idempotency-key": f"ir-auto-{uuid4().hex}"},
+            )
+            logger.info("auto_capture.completed", inspection_id=record["inspection_id"], outcome=record.get("outcome"), category=category)
+        except Exception as exc:
+            logger.error("auto_capture.failed", error_type=type(exc).__name__)
+
+    def close(self) -> None:
+        if self._auto_capture is not None:
+            self._auto_capture.close()
 
     def _create(self, body: bytes, headers: dict[str, str]) -> tuple[int, dict[str, Any]]:
         if len(body) > 64 * 1024:
@@ -746,6 +797,7 @@ def serve_api(api: InspectionApi, *, host: str = "127.0.0.1", port: int = 8000) 
     finally:
         logger.info("api.shutdown", host=host, port=port)
         server.server_close()
+        api.close()
         api.hardware.close()
         api.store.close()
 

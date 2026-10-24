@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 from .api import serve_api
@@ -42,13 +43,32 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def environment_flag(name: str, environ: dict[str, str] | None = None) -> bool:
+    value = (environ or os.environ).get(name, "false").strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off", ""}:
+        return False
+    raise ValueError(f"{name} must be true or false")
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     thresholds = dict(args.threshold)
+    try:
+        auto_capture_on_ir = environment_flag("AUTO_CAPTURE_ON_IR")
+    except ValueError as exc:
+        build_parser().error(str(exc))
+    auto_capture_category = os.environ.get("AUTO_CAPTURE_CATEGORY", "").strip()
+    if auto_capture_on_ir:
+        if not args.hardware_serial_port:
+            build_parser().error("AUTO_CAPTURE_ON_IR requires --hardware-serial-port")
+        if auto_capture_category not in thresholds:
+            build_parser().error("AUTO_CAPTURE_CATEGORY must be one of the configured --threshold categories")
     release = load_reviewed_release(args.metadata, args.artifacts, args.teacher, thresholds)
     args.db.parent.mkdir(parents=True, exist_ok=True)
     hardware = open_serial_bridge(args.hardware_serial_port, args.hardware_baudrate) if args.hardware_serial_port else None
-    api = release.create_api(device=args.device, image_root=args.image_root, evidence_roots=args.evidence_root, hardware=hardware, store=InspectionStore(args.db))
+    api = release.create_api(device=args.device, image_root=args.image_root, evidence_roots=args.evidence_root, hardware=hardware, store=InspectionStore(args.db), auto_capture_on_ir=auto_capture_on_ir, auto_capture_category=auto_capture_category or None)
     serve_api(api, host=args.host, port=args.port)
     return 0
 

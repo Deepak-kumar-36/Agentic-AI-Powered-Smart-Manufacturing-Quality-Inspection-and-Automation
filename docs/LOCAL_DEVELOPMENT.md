@@ -194,6 +194,26 @@ The threshold values above are placeholders, not recommendations. The reviewed
 release loader rejects unqualified metadata, missing hashes, incompatible
 artifacts, and missing category thresholds.
 
+### Optional supervised IR-triggered capture
+
+This remains off by default. To enable it for a local, supervised test session,
+export an explicit boolean and one configured category before server startup:
+
+```bash
+export AUTO_CAPTURE_ON_IR=true
+export AUTO_CAPTURE_CATEGORY=bottle
+```
+
+The category must have a corresponding `--threshold`, and the server must be
+started with `--hardware-serial-port`. A capture occurs only after fresh,
+connected IR telemetry transitions from clear to detected and remains stable
+through the host debounce window. One event creates at most one fresh-camera
+inspection; it is re-armed only when the sensor reports clear. Stale,
+disconnected, malformed, initial-present, or duplicate telemetry does not
+trigger capture. Camera/model/evidence readiness is checked before an automatic
+inspection is created. This feature never controls the motor and never lets the
+sensor or Gemini set an official decision.
+
 For a CPU-capable reviewed environment, use the project/runtime-supported CPU
 device instead of `cuda`. Do not install or download model weights as part of
 this guide.

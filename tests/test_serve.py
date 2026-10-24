@@ -2,7 +2,7 @@ import unittest
 from pathlib import Path
 import tempfile
 
-from app.serve import build_parser, parse_threshold
+from app.serve import build_parser, environment_flag, parse_threshold
 
 
 class ServeCliTests(unittest.TestCase):
@@ -33,6 +33,12 @@ class ServeCliTests(unittest.TestCase):
             "--image-root", "images", "--threshold", "bottle:0.2:0.8",
         ])
         self.assertIsNone(args.hardware_serial_port)
+
+    def test_auto_capture_environment_flag_is_disabled_by_default_and_strict(self) -> None:
+        self.assertFalse(environment_flag("AUTO_CAPTURE_ON_IR", {}))
+        self.assertTrue(environment_flag("AUTO_CAPTURE_ON_IR", {"AUTO_CAPTURE_ON_IR": "true"}))
+        with self.assertRaisesRegex(ValueError, "true or false"):
+            environment_flag("AUTO_CAPTURE_ON_IR", {"AUTO_CAPTURE_ON_IR": "sometimes"})
 
 
 if __name__ == "__main__":

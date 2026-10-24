@@ -128,6 +128,7 @@ class InspectionApiTests(unittest.TestCase):
         status, disabled = self.api.handle("GET", "/api/v1/hardware/status")
         self.assertEqual(status, 200)
         self.assertEqual(disabled["state"], "disabled")
+        self.assertFalse(disabled["auto_capture_on_ir"])
         self.assertEqual(disabled["sensor_state"], "UNKNOWN")
         with tempfile.TemporaryDirectory() as directory:
             image = Path(directory) / "sample.png"
