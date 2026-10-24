@@ -76,6 +76,7 @@ test('dashboard is a single scrollable workspace with bounded history controls a
   assert.match(html, /Idempotency-Key/);
   assert.match(html, /Capturing and inspecting one fresh frame/);
   assert.match(html, /Camera configuration stays in memory/);
+  assert.match(html, /Direct AI inspection/);
   assert.match(html, /OBJECT_DETECTED/);
   assert.match(html, /sensorState\.replaceAll\('_',' '\)/);
   assert.match(html, /Automatic capture is armed/);

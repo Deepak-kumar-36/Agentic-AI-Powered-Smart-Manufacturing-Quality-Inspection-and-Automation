@@ -351,7 +351,8 @@ class InspectionApiTests(unittest.TestCase):
             now = datetime.now(timezone.utc)
             frame = type("Frame", (), {"frame": np.zeros((64, 64, 3), dtype=np.uint8), "captured_at_utc": now.isoformat(), "camera_id": "fake", "sequence_no": 1, "width": 64, "height": 64})()
             source = FakeCamera(frame)
-            api = InspectionApi(InspectionStore(), model=FakeModel(0.1), policies={"bottle": DecisionPolicy("policy-1", frozenset({"efficientad-s-native-v1"}), 0.2, 0.8)}, image_root=directory, camera_source_factory=lambda _url: source)
+            hardware = FakeHardware()  # No IR event is emitted for this direct capture.
+            api = InspectionApi(InspectionStore(), model=FakeModel(0.1), policies={"bottle": DecisionPolicy("policy-1", frozenset({"efficientad-s-native-v1"}), 0.2, 0.8)}, image_root=directory, camera_source_factory=lambda _url: source, hardware=hardware)
             try:
                 status, configured = api.handle("POST", "/api/v1/camera/configure", json.dumps({"url": "http://127.0.0.1:8080/video"}).encode())
                 self.assertEqual(status, 200)
@@ -363,8 +364,30 @@ class InspectionApiTests(unittest.TestCase):
                 self.assertEqual(record["evidence"]["input_image_sha256"], hashlib.sha256(stored.read_bytes()).hexdigest())
                 events = api.handle("GET", f"/api/v1/inspections/{record['inspection_id']}/events")[1]["items"]
                 self.assertEqual([event["event_type"] for event in events], ["inspection.created", "inspection.decision_recorded"])
+                self.assertEqual(hardware.decisions, [(record["inspection_id"], "PASS")])
                 duplicate = api.handle("POST", "/api/v1/camera/capture-inspection", json.dumps({"category": "bottle"}).encode(), {"Idempotency-Key": "camera-one"})[1]
                 self.assertEqual(duplicate["inspection_id"], record["inspection_id"])
+            finally:
+                api.store.close()
+
+    def test_phone_camera_direct_inference_failure_is_unverified_without_ir_event(self) -> None:
+        class FailingModel:
+            def score(self, _category, _image):
+                raise RuntimeError("model runtime unavailable")
+
+        with tempfile.TemporaryDirectory() as directory:
+            now = datetime.now(timezone.utc)
+            frame = type("Frame", (), {"frame": np.zeros((64, 64, 3), dtype=np.uint8), "captured_at_utc": now.isoformat(), "camera_id": "fake", "sequence_no": 1, "width": 64, "height": 64})()
+            hardware = FakeHardware()
+            api = InspectionApi(InspectionStore(), model=FailingModel(), policies={"bottle": DecisionPolicy("policy-1", frozenset({"efficientad-s-native-v1"}), 0.2, 0.8)}, image_root=directory, camera_source_factory=lambda _url: FakeCamera(frame), hardware=hardware)
+            try:
+                api.handle("POST", "/api/v1/camera/configure", b'{"url":"http://127.0.0.1:8080/video"}')
+                status, record = api.handle("POST", "/api/v1/camera/capture-inspection", b'{"category":"bottle"}', {"Idempotency-Key": "camera-model-failure"})
+                self.assertEqual(status, 200)
+                self.assertEqual(record["outcome"], "UNVERIFIED")
+                self.assertEqual(record["reason_codes"], ["MODEL_NOT_READY"])
+                self.assertTrue(record["evidence"]["image_path"])
+                self.assertEqual(hardware.decisions, [(record["inspection_id"], "UNVERIFIED")])
             finally:
                 api.store.close()
 
